@@ -1,0 +1,332 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>嬰兒哭聲偵測播放器</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #171c24;
+    --panel-2: #1f2732;
+    --line: #2a3340;
+    --text: #e7edf3;
+    --muted: #97a3b2;
+    --accent: #4dabf7;
+    --accent-2: #7c5cff;
+    --danger: #ff5c72;
+    --ok: #3ddc84;
+    --warn: #ffc857;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+    background: radial-gradient(1200px 800px at 70% -10%, #1a2130 0%, var(--bg) 55%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: .5px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 10px 16px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: .15s;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; color: #fff; font-weight: 600; }
+  button.danger { border-color: var(--danger); color: var(--danger); }
+  label.file {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 16px; border: 1px dashed var(--line); border-radius: 10px; cursor: pointer;
+  }
+  label.file:hover { border-color: var(--accent); }
+  input[type=file] { display: none; }
+  .status {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px; border-radius: 12px; background: var(--panel-2);
+    border: 1px solid var(--line); margin-bottom: 14px;
+  }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--muted); flex: none; transition: .2s; }
+  .dot.listening { background: var(--ok); box-shadow: 0 0 0 0 rgba(61,220,132,.6); animation: pulse 1.6s infinite; }
+  .dot.alert { background: var(--danger); box-shadow: 0 0 14px var(--danger); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(61,220,132,.5)} 70%{box-shadow:0 0 0 12px rgba(61,220,132,0)} 100%{box-shadow:0 0 0 0 rgba(61,220,132,0)} }
+  .status .txt { font-size: 15px; font-weight: 600; }
+  .status .txt small { display:block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  canvas { width: 100%; height: 90px; display: block; background: #0b0f14; border-radius: 10px; border: 1px solid var(--line); }
+  .meters { margin-top: 14px; display: grid; gap: 10px; }
+  .meter-label { display:flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .bar { height: 10px; background: #0b0f14; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+  .bar > i { display:block; height: 100%; width: 0%; transition: width .08s linear; }
+  .bar.vol > i { background: linear-gradient(90deg, var(--ok), var(--warn), var(--danger)); }
+  .bar.score > i { background: linear-gradient(90deg, var(--accent), var(--danger)); }
+  .ctl { margin-top: 6px; }
+  .ctl label { font-size: 13px; color: var(--muted); display:flex; justify-content: space-between; margin-bottom: 6px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .kv { font-size: 12px; color: var(--muted); display:flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+  .kv b { color: var(--text); font-variant-numeric: tabular-nums; }
+  audio { width: 100%; margin-top: 10px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  a { color: var(--accent); }
+</style>
+
+<div class="wrap">
+  <h1>👶 嬰兒哭聲偵測播放器</h1>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。</div>
+
+  <div class="card">
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
+    </div>
+
+    <div class="row">
+      <button class="primary" id="startBtn">🎙️ 開啟麥克風並開始監聽</button>
+      <button class="danger" id="stopBtn" disabled>停止</button>
+      <button id="testBtn" disabled>▶️ 試聽音檔</button>
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <label class="file">📁 選擇警報音檔（MP3）
+        <input type="file" id="fileInput" accept="audio/*" />
+      </label>
+      <span class="tag" id="fileName">尚未選擇檔案</span>
+    </div>
+    <audio id="player" controls preload="auto" style="display:none"></audio>
+  </div>
+
+  <div class="card">
+    <canvas id="viz" width="700" height="90"></canvas>
+    <div class="meters">
+      <div>
+        <div class="meter-label"><span>目前音量</span><span id="volVal">–</span></div>
+        <div class="bar vol"><i id="volBar"></i></div>
+      </div>
+      <div>
+        <div class="meter-label"><span>哭聲吻合度（累積）</span><span id="scoreVal">0%</span></div>
+        <div class="bar score"><i id="scoreBar"></i></div>
+      </div>
+    </div>
+    <div class="kv">
+      <span>主頻率 <b id="freqVal">– Hz</b></span>
+      <span>語音頻帶佔比 <b id="ratioVal">–</b></span>
+      <span>狀態 <b id="frameVal">閒置</b></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ctl">
+      <label><span>靈敏度（越右越容易觸發）</span><span id="sensVal"></span></label>
+      <input type="range" id="sens" min="0" max="100" value="55" />
+    </div>
+    <div class="ctl" style="margin-top:14px">
+      <label><span>需持續時間（毫秒，避免瞬間雜音誤觸）</span><span id="durVal"></span></label>
+      <input type="range" id="dur" min="300" max="4000" step="100" value="1400" />
+    </div>
+    <div class="hint" style="margin-top:14px">
+      偵測原理：判斷聲音是否<b style="color:var(--text)">夠大聲</b>、<b style="color:var(--text)">主頻率落在嬰兒哭聲範圍（約 250–700 Hz）</b>、且<b style="color:var(--text)">能量集中在語音頻帶</b>，並需連續維持一段時間才觸發。這是啟發式判斷，並非醫療級偵測——請依實際環境調整靈敏度。
+    </div>
+  </div>
+
+  <div class="card hint">
+    <b style="color:var(--text)">使用須知</b><br>
+    • 瀏覽器基於安全限制，麥克風只能在 <b>https://</b> 或 <b>localhost</b> 下使用。若直接用 <code>file://</code> 打開可能無法取得麥克風，建議在此資料夾執行 <code>python3 -m http.server</code> 後開啟 <a href="http://localhost:8000">http://localhost:8000</a>。<br>
+    • 偵測期間本頁不會把麥克風的聲音輸出到喇叭，只會分析，不會有回授。<br>
+    • 觸發播放時會暫停偵測直到音檔播放結束，避免警報音本身造成連續觸發。
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const startBtn = $("startBtn"), stopBtn = $("stopBtn"), testBtn = $("testBtn");
+  const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player");
+  const dot = $("dot"), statusText = $("statusText"), statusSub = $("statusSub");
+  const volBar = $("volBar"), scoreBar = $("scoreBar"), volVal = $("volVal"), scoreVal = $("scoreVal");
+  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal");
+  const sens = $("sens"), dur = $("dur"), sensVal = $("sensVal"), durVal = $("durVal");
+  const canvas = $("viz"), ctx = canvas.getContext("2d");
+
+  let audioCtx, analyser, source, stream, rafId;
+  let freqData, timeData;
+  let running = false, alerting = false;
+  let cryMs = 0, lastT = 0;
+
+  // --- 音檔載入 ---
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    player.src = URL.createObjectURL(f);
+    player.style.display = "block";
+    fileName.textContent = f.name;
+    testBtn.disabled = false;
+  });
+  testBtn.addEventListener("click", () => { player.currentTime = 0; player.play(); });
+
+  // --- 滑桿顯示 ---
+  function refreshLabels() {
+    sensVal.textContent = sens.value + "%";
+    durVal.textContent = dur.value + " ms";
+  }
+  sens.addEventListener("input", refreshLabels);
+  dur.addEventListener("input", refreshLabels);
+  refreshLabels();
+
+  // 靈敏度 -> 音量門檻(dB)。0% => -18dB(很難觸發)，100% => -50dB(很容易)
+  function volumeThresholdDb() {
+    const s = +sens.value / 100;
+    return -18 - s * 32;
+  }
+
+  function setStatus(state, main, sub) {
+    dot.className = "dot" + (state ? " " + state : "");
+    statusText.firstChild.textContent = main;
+    statusSub.textContent = sub || "";
+  }
+
+  startBtn.addEventListener("click", start);
+  stopBtn.addEventListener("click", stop);
+
+  async function start() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+    } catch (e) {
+      setStatus("alert", "無法開啟麥克風", e.message || "請確認已授權，且在 https/localhost 下開啟");
+      return;
+    }
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser); // 不接到 destination，避免回授
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    timeData = new Float32Array(analyser.fftSize);
+
+    running = true; cryMs = 0; lastT = performance.now();
+    startBtn.disabled = true; stopBtn.disabled = false;
+    setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
+    loop();
+  }
+
+  function stop() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (audioCtx) audioCtx.close();
+    startBtn.disabled = false; stopBtn.disabled = true;
+    setStatus("", "已停止", "麥克風已關閉");
+    volBar.style.width = "0%"; scoreBar.style.width = "0%";
+  }
+
+  player.addEventListener("ended", () => {
+    if (running) { alerting = false; cryMs = 0; setStatus("listening", "監聽中…", "已回到偵測狀態"); }
+  });
+
+  function trigger() {
+    if (alerting) return;
+    alerting = true; cryMs = 0;
+    setStatus("alert", "偵測到哭聲！播放中…", "");
+    if (player.src) { player.currentTime = 0; player.play().catch(() => {}); }
+    else { beep(); alerting = false; } // 沒有音檔時退而發出提示音
+  }
+
+  // 沒有選擇音檔時的備援提示音
+  function beep() {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "sine"; o.frequency.value = 880;
+    g.gain.setValueAtTime(0.001, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
+    o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.6);
+  }
+
+  function loop() {
+    if (!running) return;
+    rafId = requestAnimationFrame(loop);
+
+    analyser.getByteFrequencyData(freqData);
+    analyser.getFloatTimeDomainData(timeData);
+
+    // 1) 音量 (RMS -> dB)
+    let sum = 0;
+    for (let i = 0; i < timeData.length; i++) sum += timeData[i] * timeData[i];
+    const rms = Math.sqrt(sum / timeData.length);
+    const db = 20 * Math.log10(rms + 1e-9); // 約 -90..0
+
+    // 2) 頻譜分析
+    const nyquist = audioCtx.sampleRate / 2;
+    const binHz = nyquist / freqData.length;
+    let total = 0, voiceBand = 0, peakMag = 0, peakBin = 0;
+    for (let i = 0; i < freqData.length; i++) {
+      const m = freqData[i];
+      total += m;
+      const hz = i * binHz;
+      if (hz >= 250 && hz <= 3000) voiceBand += m;         // 語音/哭聲頻帶能量
+      if (hz >= 200 && hz <= 1000 && m > peakMag) { peakMag = m; peakBin = i; } // 基頻搜尋範圍
+    }
+    const ratio = total > 0 ? voiceBand / total : 0;
+    const domFreq = peakBin * binHz;
+
+    // 3) 單幀是否像哭聲
+    const loud = db > volumeThresholdDb();
+    const pitchOk = domFreq >= 250 && domFreq <= 700 && peakMag > 90;
+    const bandOk = ratio > 0.5;
+    const cryLike = loud && pitchOk && bandOk;
+
+    // 4) 時間累積（與畫面更新率無關）
+    const now = performance.now();
+    const dt = Math.min(now - lastT, 100); lastT = now;
+    if (!alerting) {
+      if (cryLike) cryMs += dt;
+      else cryMs = Math.max(0, cryMs - dt * 1.5); // 未吻合時較快衰減
+      if (cryMs >= +dur.value) trigger();
+    }
+
+    // 5) UI 更新
+    const volPct = Math.max(0, Math.min(100, (db + 70) / 70 * 100));
+    volBar.style.width = volPct.toFixed(0) + "%";
+    volVal.textContent = db.toFixed(0) + " dB";
+    const scorePct = Math.min(100, cryMs / +dur.value * 100);
+    scoreBar.style.width = scorePct.toFixed(0) + "%";
+    scoreVal.textContent = scorePct.toFixed(0) + "%";
+    freqVal.textContent = domFreq.toFixed(0) + " Hz";
+    ratioVal.textContent = (ratio * 100).toFixed(0) + "%";
+    frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
+    frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
+
+    drawViz();
+  }
+
+  function drawViz() {
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const bins = freqData.length;
+    const barW = w / 220;
+    for (let x = 0; x < 220; x++) {
+      const i = Math.floor(x / 220 * (bins * 0.35)); // 只畫較有意義的低中頻段
+      const m = freqData[i] / 255;
+      const bh = m * h;
+      const hz = i * (audioCtx.sampleRate / 2 / bins);
+      ctx.fillStyle = (hz >= 250 && hz <= 700) ? "rgba(255,92,114,.9)" : "rgba(77,171,247,.55)";
+      ctx.fillRect(x * barW, h - bh, barW * 0.8, bh);
+    }
+  }
+})();
+</script>
