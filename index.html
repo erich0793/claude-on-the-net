@@ -146,6 +146,7 @@
       <span>主頻率 <b id="freqVal">– Hz</b></span>
       <span>語音頻帶佔比 <b id="ratioVal">–</b></span>
       <span>狀態 <b id="frameVal">閒置</b></span>
+      <span>條件 <b id="condVal">–</b></span>
     </div>
   </div>
 
@@ -156,7 +157,7 @@
     </div>
     <div class="ctl" style="margin-top:14px">
       <label><span>需持續時間（毫秒，避免瞬間雜音誤觸）</span><span id="durVal"></span></label>
-      <input type="range" id="dur" min="300" max="4000" step="100" value="1400" />
+      <input type="range" id="dur" min="300" max="4000" step="100" value="1000" />
     </div>
     <div class="ctl" style="margin-top:14px">
       <label><span>觸發後播放時長（音檔較短會自動循環）</span></label>
@@ -170,7 +171,7 @@
       </select>
     </div>
     <div class="hint" style="margin-top:14px">
-      偵測原理：判斷聲音是否<b style="color:var(--text)">夠大聲</b>、<b style="color:var(--text)">主頻率落在嬰兒哭聲範圍（約 250–700 Hz）</b>、且<b style="color:var(--text)">能量集中在語音頻帶</b>，並需連續維持一段時間才觸發。這是啟發式判斷，並非醫療級偵測——請依實際環境調整靈敏度。
+      偵測原理：判斷聲音是否<b style="color:var(--text)">夠大聲</b>、<b style="color:var(--text)">主頻率落在嬰兒哭聲範圍（約 200–1200 Hz）</b>、且<b style="color:var(--text)">能量集中在語音頻帶</b>，累積夠久才觸發。上方「條件」會即時顯示三項各自是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
     </div>
   </div>
 
@@ -189,7 +190,7 @@
   const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player");
   const dot = $("dot"), statusText = $("statusText"), statusSub = $("statusSub");
   const volBar = $("volBar"), scoreBar = $("scoreBar"), volVal = $("volVal"), scoreVal = $("scoreVal");
-  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal");
+  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal");
   const sens = $("sens"), dur = $("dur"), sensVal = $("sensVal"), durVal = $("durVal");
   const canvas = $("viz"), ctx = canvas.getContext("2d");
 
@@ -369,10 +370,10 @@
   dur.addEventListener("input", refreshLabels);
   refreshLabels();
 
-  // 靈敏度 -> 音量門檻(dB)。0% => -18dB(很難觸發)，100% => -50dB(很容易)
+  // 靈敏度 -> 音量門檻(dB)。0% => -22dB(很難觸發)，100% => -52dB(很容易)
   function volumeThresholdDb() {
     const s = +sens.value / 100;
-    return -18 - s * 32;
+    return -22 - s * 30;
   }
 
   function setStatus(state, main, sub) {
@@ -405,14 +406,25 @@
     running = true; cryMs = 0; lastT = performance.now();
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
+    requestWake();
     loop();
   }
+
+  // 監聽期間防止螢幕休眠（螢幕鎖定會讓瀏覽器暫停偵測）
+  let wakeLock = null;
+  async function requestWake() {
+    try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { /* 不支援時略過 */ }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (running && document.visibilityState === "visible") requestWake();
+  });
 
   function stop() {
     running = false;
     if (rafId) cancelAnimationFrame(rafId);
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (audioCtx) audioCtx.close();
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
     volBar.style.width = "0%"; scoreBar.style.width = "0%";
@@ -483,26 +495,26 @@
     let total = 0, voiceBand = 0, peakMag = 0, peakBin = 0;
     for (let i = 0; i < freqData.length; i++) {
       const m = freqData[i];
-      total += m;
       const hz = i * binHz;
+      if (hz <= 8000) total += m; // 8kHz 以上幾乎無內容，不列入基準
       if (hz >= 250 && hz <= 3000) voiceBand += m;         // 語音/哭聲頻帶能量
-      if (hz >= 200 && hz <= 1000 && m > peakMag) { peakMag = m; peakBin = i; } // 基頻搜尋範圍
+      if (hz >= 150 && hz <= 1500 && m > peakMag) { peakMag = m; peakBin = i; } // 基頻搜尋範圍
     }
     const ratio = total > 0 ? voiceBand / total : 0;
     const domFreq = peakBin * binHz;
 
-    // 3) 單幀是否像哭聲
+    // 3) 單幀是否像哭聲（放寬：哭聲泛音常比基頻強，主頻率允許到 1200Hz）
     const loud = db > volumeThresholdDb();
-    const pitchOk = domFreq >= 250 && domFreq <= 700 && peakMag > 90;
-    const bandOk = ratio > 0.5;
+    const pitchOk = domFreq >= 200 && domFreq <= 1200 && peakMag > 60;
+    const bandOk = ratio > 0.45;
     const cryLike = loud && pitchOk && bandOk;
 
-    // 4) 時間累積（與畫面更新率無關）
+    // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     const now = performance.now();
     const dt = Math.min(now - lastT, 100); lastT = now;
     if (!alerting) {
       if (cryLike) cryMs += dt;
-      else cryMs = Math.max(0, cryMs - dt * 1.5); // 未吻合時較快衰減
+      else cryMs = Math.max(0, cryMs - dt * 0.6);
       if (cryMs >= +dur.value) trigger();
     }
 
@@ -517,6 +529,7 @@
     ratioVal.textContent = (ratio * 100).toFixed(0) + "%";
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
     frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
+    condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (pitchOk ? "頻率✓" : "頻率✗") + " " + (bandOk ? "頻帶✓" : "頻帶✗");
 
     drawViz();
   }
