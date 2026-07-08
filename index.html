@@ -105,7 +105,9 @@
         <input type="file" id="fileInput" accept="audio/*" />
       </label>
       <span class="tag" id="fileName">尚未選擇檔案</span>
+      <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
     </div>
+    <div class="hint" style="margin-top:8px">選過的音檔會自動記在這台裝置的瀏覽器裡，下次打開免重選；音檔不會上傳到任何地方。</div>
     <audio id="player" controls preload="auto" style="display:none"></audio>
   </div>
 
@@ -166,15 +168,62 @@
   let running = false, alerting = false;
   let cryMs = 0, lastT = 0;
 
+  const forgetBtn = $("forgetBtn");
+
+  // --- 本地儲存（IndexedDB）：音檔只存在這台裝置的瀏覽器裡，不會上傳 ---
+  function openDB() {
+    return new Promise((res, rej) => {
+      const req = indexedDB.open("babycry", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("files");
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+  async function saveAudio(file) {
+    try {
+      const db = await openDB();
+      const tx = db.transaction("files", "readwrite");
+      tx.objectStore("files").put({ name: file.name, blob: file }, "alert");
+      await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    } catch (e) { /* 儲存失敗不影響本次使用 */ }
+  }
+  async function loadSavedAudio() {
+    try {
+      const db = await openDB();
+      const req = db.transaction("files").objectStore("files").get("alert");
+      const rec = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+      if (rec && rec.blob) useAudio(rec.blob, rec.name, true);
+    } catch (e) { /* 無儲存或不支援時安靜略過 */ }
+  }
+  async function forgetAudio() {
+    try {
+      const db = await openDB();
+      db.transaction("files", "readwrite").objectStore("files").delete("alert");
+    } catch (e) {}
+    player.removeAttribute("src");
+    player.style.display = "none";
+    fileName.textContent = "尚未選擇檔案";
+    testBtn.disabled = true;
+    forgetBtn.style.display = "none";
+  }
+
+  function useAudio(blob, name, restored) {
+    player.src = URL.createObjectURL(blob);
+    player.style.display = "block";
+    fileName.textContent = (restored ? "已載入上次的音檔：" : "") + name;
+    testBtn.disabled = false;
+    forgetBtn.style.display = "inline-block";
+  }
+
   // --- 音檔載入 ---
   fileInput.addEventListener("change", () => {
     const f = fileInput.files[0];
     if (!f) return;
-    player.src = URL.createObjectURL(f);
-    player.style.display = "block";
-    fileName.textContent = f.name;
-    testBtn.disabled = false;
+    useAudio(f, f.name, false);
+    saveAudio(f); // 記住這個音檔，下次自動載入
   });
+  forgetBtn.addEventListener("click", forgetAudio);
+  loadSavedAudio();
   testBtn.addEventListener("click", () => { player.currentTime = 0; player.play(); });
 
   // --- 滑桿顯示 ---
