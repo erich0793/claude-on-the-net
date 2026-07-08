@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。</div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v6</span></div>
 
   <div class="card">
     <div class="status">
@@ -370,10 +370,10 @@
   dur.addEventListener("input", refreshLabels);
   refreshLabels();
 
-  // 靈敏度 -> 音量門檻(dB)。0% => -22dB(很難觸發)，100% => -52dB(很容易)
+  // 靈敏度 -> 音量門檻(dB)。0% => -20dB(很難觸發)，100% => -60dB(很容易)
   function volumeThresholdDb() {
     const s = +sens.value / 100;
-    return -22 - s * 30;
+    return -20 - s * 40;
   }
 
   function setStatus(state, main, sub) {
@@ -387,14 +387,16 @@
 
   async function start() {
     try {
+      // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
       });
     } catch (e) {
       setStatus("alert", "無法開啟麥克風", e.message || "請確認已授權，且在 https/localhost 下開啟");
       return;
     }
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") await audioCtx.resume(); // iOS 有時以暫停狀態啟動
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
