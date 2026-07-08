@@ -102,8 +102,10 @@
 
     <div class="row" style="margin-top:12px">
       <label class="file">📁 選擇警報音檔（MP3）
-        <input type="file" id="fileInput" accept="audio/*" />
+        <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac" />
       </label>
+      <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
+      <input type="file" id="anyFileInput" style="display:none" />
       <span class="tag" id="fileName">尚未選擇檔案</span>
       <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
     </div>
@@ -246,12 +248,16 @@
   }
 
   // --- 音檔載入 ---
-  fileInput.addEventListener("change", () => {
-    const f = fileInput.files[0];
+  function onPick(input) {
+    const f = input.files[0];
     if (!f) return;
     useAudio(f, f.name, false);
     saveAudio(f); // 記住這個音檔，下次自動載入
-  });
+  }
+  fileInput.addEventListener("change", () => onPick(fileInput));
+  const anyFileInput = $("anyFileInput");
+  $("anyFileBtn").addEventListener("click", () => anyFileInput.click());
+  anyFileInput.addEventListener("change", () => onPick(anyFileInput));
   forgetBtn.addEventListener("click", forgetAudio);
   loadSavedAudio();
 
