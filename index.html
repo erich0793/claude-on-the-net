@@ -158,6 +158,17 @@
       <label><span>需持續時間（毫秒，避免瞬間雜音誤觸）</span><span id="durVal"></span></label>
       <input type="range" id="dur" min="300" max="4000" step="100" value="1400" />
     </div>
+    <div class="ctl" style="margin-top:14px">
+      <label><span>觸發後播放時長（音檔較短會自動循環）</span></label>
+      <select id="playDur" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
+        <option value="once">播完一次就停</option>
+        <option value="1">循環 1 分鐘</option>
+        <option value="5">循環 5 分鐘</option>
+        <option value="10">循環 10 分鐘</option>
+        <option value="30">循環 30 分鐘</option>
+        <option value="60">循環 60 分鐘</option>
+      </select>
+    </div>
     <div class="hint" style="margin-top:14px">
       偵測原理：判斷聲音是否<b style="color:var(--text)">夠大聲</b>、<b style="color:var(--text)">主頻率落在嬰兒哭聲範圍（約 250–700 Hz）</b>、且<b style="color:var(--text)">能量集中在語音頻帶</b>，並需連續維持一段時間才觸發。這是啟發式判斷，並非醫療級偵測——請依實際環境調整靈敏度。
     </div>
@@ -407,16 +418,40 @@
     volBar.style.width = "0%"; scoreBar.style.width = "0%";
   }
 
-  player.addEventListener("ended", () => {
-    if (running) { alerting = false; cryMs = 0; setStatus("listening", "監聽中…", "已回到偵測狀態"); }
-  });
+  // --- 觸發後播放時長（短音檔自動循環補足） ---
+  const playDur = $("playDur");
+  playDur.value = localStorage.getItem("playDur") || "once";
+  if (playDur.selectedIndex < 0) playDur.value = "once";
+  playDur.addEventListener("change", () => localStorage.setItem("playDur", playDur.value));
+
+  let alertTimer = null;
+
+  function stopAlert() {
+    if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
+    const was = alerting;
+    alerting = false; cryMs = 0;
+    player.loop = false;
+    if (!player.paused) player.pause();
+    if (running && was) setStatus("listening", "監聽中…", "已回到偵測狀態");
+  }
+  player.addEventListener("ended", () => { if (alerting) stopAlert(); });
+  // 手動按播放器的暫停也視為解除警報
+  player.addEventListener("pause", () => { if (alerting && !player.ended) stopAlert(); });
 
   function trigger() {
     if (alerting) return;
     alerting = true; cryMs = 0;
-    setStatus("alert", "偵測到哭聲！播放中…", "");
-    if (player.src) { player.currentTime = 0; player.play().catch(() => {}); }
-    else { beep(); alerting = false; } // 沒有音檔時退而發出提示音
+    if (player.src) {
+      const mins = playDur.value;
+      if (mins !== "once") {
+        player.loop = true;
+        alertTimer = setTimeout(stopAlert, +mins * 60000);
+        setStatus("alert", "偵測到哭聲！循環播放 " + mins + " 分鐘…", "按播放器的暫停可提前結束");
+      } else {
+        setStatus("alert", "偵測到哭聲！播放中…", "");
+      }
+      player.currentTime = 0; player.play().catch(() => {});
+    } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
   // 沒有選擇音檔時的備援提示音
