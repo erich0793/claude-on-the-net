@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v10</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v11</span></div>
 
   <div class="card">
     <div class="status">
@@ -210,7 +210,7 @@
   let audioCtx, analyser, source, stream, rafId;
   let freqData, timeData;
   let running = false, alerting = false;
-  let cryMs = 0, lastT = 0;
+  let cryMs = 0, lastT = 0, lastWatchdog = 0;
 
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn");
   dlBtn.addEventListener("click", () => {
@@ -458,7 +458,8 @@
       setStatus("alert", "無法開啟麥克風", e.message || "請確認已授權，且在 https/localhost 下開啟");
       return;
     }
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // 與播放共用同一個 AudioContext：iOS 的音訊工作階段較不會在播放前後互相打架
+    audioCtx = playCtx;
     if (audioCtx.state === "suspended") await audioCtx.resume(); // iOS 有時以暫停狀態啟動
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -467,6 +468,8 @@
     source.connect(analyser); // 不接到 destination，避免回授
     freqData = new Uint8Array(analyser.frequencyBinCount);
     timeData = new Float32Array(analyser.fftSize);
+    const track = stream.getAudioTracks()[0];
+    if (track) track.addEventListener("ended", () => { if (running) recoverMic(); });
 
     running = true; cryMs = 0; lastT = performance.now();
     startBtn.disabled = true; stopBtn.disabled = false;
@@ -475,20 +478,47 @@
     loop();
   }
 
+  // iOS 在播放前後或系統音訊事件時，可能收回麥克風或暫停音訊引擎且不自行恢復——自動重連
+  let recovering = false;
+  async function recoverMic() {
+    if (recovering || !running) return;
+    recovering = true;
+    setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+      });
+      if (source) source.disconnect();
+      source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const track = stream.getAudioTracks()[0];
+      if (track) track.addEventListener("ended", () => { if (running) recoverMic(); });
+      if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
+    } catch (e) {
+      setStatus("alert", "麥克風被關閉且無法自動恢復", "請按「停止」後重新開始監聽");
+    }
+    recovering = false;
+  }
+
   // 監聽期間防止螢幕休眠（螢幕鎖定會讓瀏覽器暫停偵測）
   let wakeLock = null;
   async function requestWake() {
     try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { /* 不支援時略過 */ }
   }
   document.addEventListener("visibilitychange", () => {
-    if (running && document.visibilityState === "visible") requestWake();
+    if (running && document.visibilityState === "visible") {
+      requestWake();
+      if (audioCtx && audioCtx.state !== "running") audioCtx.resume().catch(() => {});
+      const t = stream && stream.getAudioTracks()[0];
+      if (!t || t.readyState === "ended") recoverMic();
+    }
   });
 
   function stop() {
     running = false;
     if (rafId) cancelAnimationFrame(rafId);
     if (stream) stream.getTracks().forEach(t => t.stop());
-    if (audioCtx) audioCtx.close();
+    if (source) { source.disconnect(); source = null; } // AudioContext 留給播放共用，不關閉
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
@@ -610,6 +640,15 @@
     // 3) 單幀是否像哭聲
     const now = performance.now();
     const dt = Math.min(now - lastT, 100); lastT = now;
+
+    // 看門狗：每 3 秒檢查音訊引擎與麥克風是否被系統收走，必要時自動恢復
+    if (now - lastWatchdog > 3000) {
+      lastWatchdog = now;
+      if (audioCtx.state !== "running") audioCtx.resume().catch(() => {});
+      const t = stream && stream.getAudioTracks()[0];
+      if (!t || t.readyState === "ended") recoverMic();
+    }
+
     updateNoiseFloor(db, dt);
     const loud = db > Math.max(-65, noiseFloor + loudMarginDb());
     const pe = estimatePitch();
