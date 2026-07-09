@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v11</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v12</span></div>
 
   <div class="card">
     <div class="status">
@@ -148,6 +148,7 @@
       <span>基頻(F0) <b id="f0Val">–</b></span>
       <span>語音頻帶佔比 <b id="ratioVal">–</b></span>
       <span>背景噪音 <b id="floorVal">–</b></span>
+      <span>短聲計數 <b id="burstVal">–</b></span>
       <span>狀態 <b id="frameVal">閒置</b></span>
       <span>條件 <b id="condVal">–</b></span>
     </div>
@@ -155,6 +156,13 @@
 
   <div class="card">
     <div class="ctl">
+      <label><span>觸發條件</span></label>
+      <select id="trigMode" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
+        <option value="cry">1. 哭泣才觸發（持續哭聲累積夠久）</option>
+        <option value="fuss">2. 哭泣＋哀叫都觸發（15 秒內 3 聲短促哎叫也算）</option>
+      </select>
+    </div>
+    <div class="ctl" style="margin-top:14px">
       <label><span>靈敏度（越右越容易觸發）</span><span id="sensVal"></span></label>
       <input type="range" id="sens" min="0" max="100" value="55" />
     </div>
@@ -203,7 +211,7 @@
   const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player");
   const dot = $("dot"), statusText = $("statusText"), statusSub = $("statusSub");
   const volBar = $("volBar"), scoreBar = $("scoreBar"), volVal = $("volVal"), scoreVal = $("scoreVal");
-  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal"), f0Val = $("f0Val");
+  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal"), f0Val = $("f0Val"), burstVal = $("burstVal");
   const sens = $("sens"), dur = $("dur"), sensVal = $("sensVal"), durVal = $("durVal");
   const canvas = $("viz"), ctx = canvas.getContext("2d");
 
@@ -211,6 +219,7 @@
   let freqData, timeData;
   let running = false, alerting = false;
   let cryMs = 0, lastT = 0, lastWatchdog = 0;
+  let burstMs = 0, burstTimes = []; // 哀叫模式：短聲（≥150ms 的嬰兒聲）發生時刻
 
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn");
   dlBtn.addEventListener("click", () => {
@@ -536,6 +545,11 @@
   if (fadeEnd.selectedIndex < 0) fadeEnd.value = "1";
   fadeEnd.addEventListener("change", () => localStorage.setItem("fadeEnd", fadeEnd.value));
 
+  const trigMode = $("trigMode");
+  trigMode.value = localStorage.getItem("trigMode") || "cry";
+  if (trigMode.selectedIndex < 0) trigMode.value = "cry";
+  trigMode.addEventListener("change", () => { localStorage.setItem("trigMode", trigMode.value); burstTimes = []; });
+
   // iPhone 不允許網頁直接調整 <audio> 的音量，改經 Web Audio 增益節點控制。
   // MediaElementSource 每個元素只能建立一次，故全域保留。
   let playCtx = null, playGain = null;
@@ -574,7 +588,7 @@
 
   function trigger() {
     if (alerting) return;
-    alerting = true; cryMs = 0;
+    alerting = true; cryMs = 0; burstMs = 0; burstTimes = [];
     if (player.src) {
       const mins = playDur.value;
       ensurePlayGraph();
@@ -650,7 +664,9 @@
     }
 
     updateNoiseFloor(db, dt);
-    const loud = db > Math.max(-65, noiseFloor + loudMarginDb());
+    const fuss = trigMode.value === "fuss";
+    // 哀叫通常比大哭小聲，哀叫模式音量門檻再放低 5dB
+    const loud = db > Math.max(-68, noiseFloor + loudMarginDb() - (fuss ? 5 : 0));
     const pe = estimatePitch();
     // 嬰兒哭聲：基頻 250–1000Hz 且振動有週期性
     const babyPitch = pe.r > 0.35 && pe.f0 >= 250 && pe.f0 <= 1000;
@@ -662,9 +678,15 @@
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     if (!alerting) {
-      if (cryLike) cryMs += dt;
-      else cryMs = Math.max(0, cryMs - dt * 0.6);
-      if (cryMs >= +dur.value) trigger();
+      if (cryLike) { cryMs += dt; burstMs += dt; }
+      else {
+        if (burstMs >= 150) burstTimes.push(now); // 一段短促嬰兒聲結束，記一筆
+        burstMs = 0;
+        cryMs = Math.max(0, cryMs - dt * 0.6);
+      }
+      while (burstTimes.length && now - burstTimes[0] > 15000) burstTimes.shift();
+      if (cryMs >= +dur.value) trigger();                     // 持續哭聲
+      else if (fuss && burstTimes.length >= 3) trigger();     // 15 秒內 3 聲哀叫
     }
 
     // 5) UI 更新
@@ -678,6 +700,7 @@
     ratioVal.textContent = (ratio * 100).toFixed(0) + "%";
     floorVal.textContent = noiseFloor.toFixed(0) + " dB";
     f0Val.textContent = pe.r > 0.35 && pe.f0 > 0 ? pe.f0.toFixed(0) + " Hz" : "無週期";
+    burstVal.textContent = fuss ? burstTimes.length + " / 3" : "（哀叫模式未開）";
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
     frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
     condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (babyPitch ? "嬰兒基頻✓" : "嬰兒基頻✗") + " " + (spectralCry ? "頻譜✓" : "頻譜✗") + (adultVoice ? " 🚫大人聲" : "");
