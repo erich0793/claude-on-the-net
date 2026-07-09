@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v8</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v9</span></div>
 
   <div class="card">
     <div class="status">
@@ -145,6 +145,7 @@
     </div>
     <div class="kv">
       <span>主頻率 <b id="freqVal">– Hz</b></span>
+      <span>基頻(F0) <b id="f0Val">–</b></span>
       <span>語音頻帶佔比 <b id="ratioVal">–</b></span>
       <span>背景噪音 <b id="floorVal">–</b></span>
       <span>狀態 <b id="frameVal">閒置</b></span>
@@ -173,7 +174,7 @@
       </select>
     </div>
     <div class="hint" style="margin-top:14px">
-      偵測原理：<b style="color:var(--text)">音量高出背景噪音一定幅度</b>（自動適應環境與手機麥克風），且<b style="color:var(--text)">頻率（200–1200 Hz）或語音頻帶佔比至少一項像人聲</b>，累積夠久才觸發。上方「條件」會即時顯示三項各自是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
+      偵測原理：<b style="color:var(--text)">音量需高出背景噪音一定幅度</b>（自動適應環境與手機），並以自相關法量測<b style="color:var(--text)">基頻（F0）</b>——嬰兒哭聲基頻約 250–1000 Hz、大人講話僅 85–255 Hz，偵測到大人聲會主動排除；沙啞尖叫另以頻譜條件判斷。「哇—換氣—哇」的間隙會保留累積進度，累積夠久才觸發。上方「條件」會即時顯示三項各自是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
     </div>
   </div>
 
@@ -192,7 +193,7 @@
   const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player");
   const dot = $("dot"), statusText = $("statusText"), statusSub = $("statusSub");
   const volBar = $("volBar"), scoreBar = $("scoreBar"), volVal = $("volVal"), scoreVal = $("scoreVal");
-  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal");
+  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal"), f0Val = $("f0Val");
   const sens = $("sens"), dur = $("dur"), sensVal = $("sensVal"), durVal = $("durVal");
   const canvas = $("viz"), ctx = canvas.getContext("2d");
 
@@ -383,6 +384,25 @@
   dur.addEventListener("input", refreshLabels);
   refreshLabels();
 
+  // 自相關法估測基頻（F0）與週期性。嬰兒哭聲 F0 約 250–700Hz（尖叫可達 1000+），
+  // 大人講話僅 85–255Hz——用真實振動週期區分，比頻譜最強峰可靠（最強峰常是泛音）。
+  function estimatePitch() {
+    const N = 1024, sr = audioCtx.sampleRate;
+    const off = timeData.length - N;
+    let energy = 0;
+    for (let i = 0; i < N; i++) { const v = timeData[off + i]; energy += v * v; }
+    if (energy < 1e-6) return { f0: 0, r: 0 };
+    const minLag = Math.floor(sr / 1000), maxLag = Math.min(N - 1, Math.floor(sr / 150));
+    let bestR = 0, bestLag = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      let sum = 0;
+      for (let i = 0; i < N - lag; i++) sum += timeData[off + i] * timeData[off + i + lag];
+      const r = sum / (energy * (N - lag) / N); // 修正視窗長度造成的偏差
+      if (r > bestR) { bestR = r; bestLag = lag; }
+    }
+    return { f0: bestLag ? sr / bestLag : 0, r: bestR };
+  }
+
   // 背景噪音估計（dB）：比目前小聲就快速下修，否則以約 0.5dB/秒緩慢上修
   let noiseFloor = -60;
   function updateNoiseFloor(db, dt) {
@@ -540,14 +560,19 @@
     const ratio = total > 0 ? voiceBand / total : 0;
     const domFreq = peakBin * binHz;
 
-    // 3) 單幀是否像哭聲：音量高出背景噪音一定幅度，且「頻率」「頻帶」至少一項像人聲
+    // 3) 單幀是否像哭聲
     const now = performance.now();
     const dt = Math.min(now - lastT, 100); lastT = now;
     updateNoiseFloor(db, dt);
     const loud = db > Math.max(-65, noiseFloor + loudMarginDb());
-    const pitchOk = domFreq >= 200 && domFreq <= 1200 && peakMag > 40;
-    const bandOk = ratio > 0.35;
-    const cryLike = loud && (pitchOk || bandOk);
+    const pe = estimatePitch();
+    // 嬰兒哭聲：基頻 250–1000Hz 且振動有週期性
+    const babyPitch = pe.r > 0.35 && pe.f0 >= 250 && pe.f0 <= 1000;
+    // 大人講話：有週期性但基頻低於 230Hz —— 明確排除，減少誤報
+    const adultVoice = pe.r > 0.35 && pe.f0 > 0 && pe.f0 < 230;
+    // 沙啞尖叫（hyperphonation/dysphonation）週期性弱，用頻譜條件備援
+    const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > 40 && ratio > 0.35;
+    const cryLike = loud && !adultVoice && (babyPitch || spectralCry);
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     if (!alerting) {
@@ -566,9 +591,10 @@
     freqVal.textContent = domFreq.toFixed(0) + " Hz";
     ratioVal.textContent = (ratio * 100).toFixed(0) + "%";
     floorVal.textContent = noiseFloor.toFixed(0) + " dB";
+    f0Val.textContent = pe.r > 0.35 && pe.f0 > 0 ? pe.f0.toFixed(0) + " Hz" : "無週期";
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
     frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
-    condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (pitchOk ? "頻率✓" : "頻率✗") + " " + (bandOk ? "頻帶✓" : "頻帶✗");
+    condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (babyPitch ? "嬰兒基頻✓" : "嬰兒基頻✗") + " " + (spectralCry ? "頻譜✓" : "頻譜✗") + (adultVoice ? " 🚫大人聲" : "");
 
     drawViz();
   }
