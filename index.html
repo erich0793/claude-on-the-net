@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v7</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v8</span></div>
 
   <div class="card">
     <div class="status">
@@ -107,6 +107,7 @@
       <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
       <input type="file" id="anyFileInput" style="display:none" />
       <span class="tag" id="fileName">尚未選擇檔案</span>
+      <button id="dlBtn" style="display:none">⬇️ 下載目前音檔</button>
       <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
     </div>
     <div class="hint" style="margin-top:8px">選過的音檔會自動記在這台裝置的瀏覽器裡，下次打開免重選；音檔不會上傳到任何地方。</div>
@@ -200,7 +201,16 @@
   let running = false, alerting = false;
   let cryMs = 0, lastT = 0;
 
-  const forgetBtn = $("forgetBtn");
+  const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn");
+  dlBtn.addEventListener("click", () => {
+    if (!currentBlob) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(currentBlob);
+    a.download = currentName || "alert-audio.wav";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
 
   // --- 本地儲存（IndexedDB）：音檔只存在這台裝置的瀏覽器裡，不會上傳 ---
   function openDB() {
@@ -237,6 +247,7 @@
     fileName.textContent = "尚未選擇檔案";
     testBtn.disabled = true;
     forgetBtn.style.display = "none";
+    dlBtn.style.display = "none";
     trimBox.style.display = "none";
     currentBlob = null; currentName = "";
   }
@@ -255,6 +266,7 @@
     fileName.textContent = (restored ? "已載入上次的音檔：" : "") + name + "（" + fmtSize(blob.size) + "）";
     testBtn.disabled = false;
     forgetBtn.style.display = "inline-block";
+    dlBtn.style.display = "inline-block";
     trimBox.style.display = "block";
     origSize.textContent = fmtSize(blob.size);
     origDur.textContent = "讀取中…";
