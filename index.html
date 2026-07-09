@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v9</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v10</span></div>
 
   <div class="card">
     <div class="status">
@@ -171,6 +171,16 @@
         <option value="10">循環 10 分鐘</option>
         <option value="30">循環 30 分鐘</option>
         <option value="60">循環 60 分鐘</option>
+      </select>
+    </div>
+    <div class="ctl" style="margin-top:14px">
+      <label><span>結束時音量（循環播放期間逐漸變小，哄睡淡出）</span></label>
+      <select id="fadeEnd" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
+        <option value="1">不變（全程同音量）</option>
+        <option value="0.75">結束時為 75%</option>
+        <option value="0.5">結束時為 50%</option>
+        <option value="0.25">結束時為 25%</option>
+        <option value="0">淡出到無聲</option>
       </select>
     </div>
     <div class="hint" style="margin-top:14px">
@@ -436,7 +446,9 @@
   player.addEventListener("play", () => { audioUnlocked = true; });
 
   async function start() {
-    unlockAudio(); // 必須在任何 await 之前，才算在使用者手勢內
+    // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
+    unlockAudio();
+    ensurePlayGraph();
     try {
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
       stream = await navigator.mediaDevices.getUserMedia({
@@ -489,6 +501,32 @@
   if (playDur.selectedIndex < 0) playDur.value = "once";
   playDur.addEventListener("change", () => localStorage.setItem("playDur", playDur.value));
 
+  const fadeEnd = $("fadeEnd");
+  fadeEnd.value = localStorage.getItem("fadeEnd") || "1";
+  if (fadeEnd.selectedIndex < 0) fadeEnd.value = "1";
+  fadeEnd.addEventListener("change", () => localStorage.setItem("fadeEnd", fadeEnd.value));
+
+  // iPhone 不允許網頁直接調整 <audio> 的音量，改經 Web Audio 增益節點控制。
+  // MediaElementSource 每個元素只能建立一次，故全域保留。
+  let playCtx = null, playGain = null;
+  function ensurePlayGraph() {
+    if (!playCtx) {
+      playCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = playCtx.createMediaElementSource(player);
+      playGain = playCtx.createGain();
+      src.connect(playGain);
+      playGain.connect(playCtx.destination);
+    }
+    if (playCtx.state === "suspended") playCtx.resume();
+  }
+  function resetGain() {
+    if (!playGain) return;
+    playGain.gain.cancelScheduledValues(playCtx.currentTime);
+    playGain.gain.setValueAtTime(1, playCtx.currentTime);
+  }
+  // 手動播放（試聽）時恢復正常音量
+  player.addEventListener("play", () => { if (!alerting) { ensurePlayGraph(); resetGain(); } });
+
   let alertTimer = null;
 
   function stopAlert() {
@@ -497,6 +535,7 @@
     alerting = false; cryMs = 0;
     player.loop = false;
     if (!player.paused) player.pause();
+    resetGain();
     if (running && was) setStatus("listening", "監聽中…", "已回到偵測狀態");
   }
   player.addEventListener("ended", () => { if (alerting) stopAlert(); });
@@ -508,10 +547,18 @@
     alerting = true; cryMs = 0;
     if (player.src) {
       const mins = playDur.value;
+      ensurePlayGraph();
+      resetGain();
       if (mins !== "once") {
         player.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
-        setStatus("alert", "偵測到哭聲！循環播放 " + mins + " 分鐘…", "按播放器的暫停可提前結束");
+        const endVol = +fadeEnd.value;
+        if (endVol < 1) {
+          // 音量從 1 線性遞減，播放結束時剛好到達選定比例
+          playGain.gain.setValueAtTime(1, playCtx.currentTime);
+          playGain.gain.linearRampToValueAtTime(endVol, playCtx.currentTime + +mins * 60);
+        }
+        setStatus("alert", "偵測到哭聲！循環播放 " + mins + " 分鐘…", endVol < 1 ? "音量將逐漸降至 " + (endVol * 100) + "%；按播放器的暫停可提前結束" : "按播放器的暫停可提前結束");
       } else {
         setStatus("alert", "偵測到哭聲！播放中…", "");
       }
