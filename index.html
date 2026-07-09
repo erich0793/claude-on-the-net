@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v6</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v7</span></div>
 
   <div class="card">
     <div class="status">
@@ -145,6 +145,7 @@
     <div class="kv">
       <span>主頻率 <b id="freqVal">– Hz</b></span>
       <span>語音頻帶佔比 <b id="ratioVal">–</b></span>
+      <span>背景噪音 <b id="floorVal">–</b></span>
       <span>狀態 <b id="frameVal">閒置</b></span>
       <span>條件 <b id="condVal">–</b></span>
     </div>
@@ -171,7 +172,7 @@
       </select>
     </div>
     <div class="hint" style="margin-top:14px">
-      偵測原理：判斷聲音是否<b style="color:var(--text)">夠大聲</b>、<b style="color:var(--text)">主頻率落在嬰兒哭聲範圍（約 200–1200 Hz）</b>、且<b style="color:var(--text)">能量集中在語音頻帶</b>，累積夠久才觸發。上方「條件」會即時顯示三項各自是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
+      偵測原理：<b style="color:var(--text)">音量高出背景噪音一定幅度</b>（自動適應環境與手機麥克風），且<b style="color:var(--text)">頻率（200–1200 Hz）或語音頻帶佔比至少一項像人聲</b>，累積夠久才觸發。上方「條件」會即時顯示三項各自是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
     </div>
   </div>
 
@@ -190,7 +191,7 @@
   const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player");
   const dot = $("dot"), statusText = $("statusText"), statusSub = $("statusSub");
   const volBar = $("volBar"), scoreBar = $("scoreBar"), volVal = $("volVal"), scoreVal = $("scoreVal");
-  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal");
+  const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal");
   const sens = $("sens"), dur = $("dur"), sensVal = $("sensVal"), durVal = $("durVal");
   const canvas = $("viz"), ctx = canvas.getContext("2d");
 
@@ -370,10 +371,15 @@
   dur.addEventListener("input", refreshLabels);
   refreshLabels();
 
-  // 靈敏度 -> 音量門檻(dB)。0% => -20dB(很難觸發)，100% => -60dB(很容易)
-  function volumeThresholdDb() {
-    const s = +sens.value / 100;
-    return -20 - s * 40;
+  // 背景噪音估計（dB）：比目前小聲就快速下修，否則以約 0.5dB/秒緩慢上修
+  let noiseFloor = -60;
+  function updateNoiseFloor(db, dt) {
+    if (db < noiseFloor) noiseFloor += (db - noiseFloor) * 0.2;
+    else noiseFloor += 0.0005 * dt;
+  }
+  // 靈敏度 -> 需高出背景噪音的幅度：0% => +22dB，100% => +5dB
+  function loudMarginDb() {
+    return 22 - (+sens.value / 100) * 17;
   }
 
   function setStatus(state, main, sub) {
@@ -385,7 +391,20 @@
   startBtn.addEventListener("click", start);
   stopBtn.addEventListener("click", stop);
 
+  // iOS 只允許使用者手勢啟動的播放；趁按下按鈕時靜音播放一瞬間，解鎖之後的自動播放
+  let audioUnlocked = false;
+  function unlockAudio() {
+    if (!player.src || audioUnlocked) return;
+    player.muted = true;
+    const p = player.play();
+    if (p) p.then(() => {
+      player.pause(); player.currentTime = 0; player.muted = false; audioUnlocked = true;
+    }).catch(() => { player.muted = false; });
+  }
+  player.addEventListener("play", () => { audioUnlocked = true; });
+
   async function start() {
+    unlockAudio(); // 必須在任何 await 之前，才算在使用者手勢內
     try {
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
       stream = await navigator.mediaDevices.getUserMedia({
@@ -464,7 +483,11 @@
       } else {
         setStatus("alert", "偵測到哭聲！播放中…", "");
       }
-      player.currentTime = 0; player.play().catch(() => {});
+      player.currentTime = 0;
+      player.play().catch(() => {
+        setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
+        beep();
+      });
     } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
@@ -499,21 +522,22 @@
       const m = freqData[i];
       const hz = i * binHz;
       if (hz <= 8000) total += m; // 8kHz 以上幾乎無內容，不列入基準
-      if (hz >= 250 && hz <= 3000) voiceBand += m;         // 語音/哭聲頻帶能量
+      if (hz >= 200 && hz <= 4000) voiceBand += m;         // 語音/哭聲頻帶能量（哭聲泛音可達 4kHz）
       if (hz >= 150 && hz <= 1500 && m > peakMag) { peakMag = m; peakBin = i; } // 基頻搜尋範圍
     }
     const ratio = total > 0 ? voiceBand / total : 0;
     const domFreq = peakBin * binHz;
 
-    // 3) 單幀是否像哭聲（放寬：哭聲泛音常比基頻強，主頻率允許到 1200Hz）
-    const loud = db > volumeThresholdDb();
-    const pitchOk = domFreq >= 200 && domFreq <= 1200 && peakMag > 60;
-    const bandOk = ratio > 0.45;
-    const cryLike = loud && pitchOk && bandOk;
-
-    // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
+    // 3) 單幀是否像哭聲：音量高出背景噪音一定幅度，且「頻率」「頻帶」至少一項像人聲
     const now = performance.now();
     const dt = Math.min(now - lastT, 100); lastT = now;
+    updateNoiseFloor(db, dt);
+    const loud = db > Math.max(-65, noiseFloor + loudMarginDb());
+    const pitchOk = domFreq >= 200 && domFreq <= 1200 && peakMag > 40;
+    const bandOk = ratio > 0.35;
+    const cryLike = loud && (pitchOk || bandOk);
+
+    // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     if (!alerting) {
       if (cryLike) cryMs += dt;
       else cryMs = Math.max(0, cryMs - dt * 0.6);
@@ -529,6 +553,7 @@
     scoreVal.textContent = scorePct.toFixed(0) + "%";
     freqVal.textContent = domFreq.toFixed(0) + " Hz";
     ratioVal.textContent = (ratio * 100).toFixed(0) + "%";
+    floorVal.textContent = noiseFloor.toFixed(0) + " dB";
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
     frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
     condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (pitchOk ? "頻率✓" : "頻率✗") + " " + (bandOk ? "頻帶✓" : "頻帶✗");
