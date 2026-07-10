@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v16</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v17</span></div>
 
   <div class="card">
     <div class="status">
@@ -464,9 +464,9 @@
 
   // 背景噪音估計（dB）：比目前小聲就快速下修，否則以約 0.5dB/秒緩慢上修
   let noiseFloor = -60;
-  function updateNoiseFloor(db, dt) {
+  function updateNoiseFloor(db, dt, calibrating) {
     if (db < noiseFloor) noiseFloor += (db - noiseFloor) * 0.2;
-    else noiseFloor += 0.0005 * dt;
+    else noiseFloor += calibrating ? (db - noiseFloor) * 0.05 : 0.0005 * dt; // 校準期快速上修
   }
   // 靈敏度 -> 需高出背景噪音的幅度：0% => +22dB，100% => +5dB
   function loudMarginDb() {
@@ -527,6 +527,7 @@
     if (track) track.addEventListener("ended", () => { if (running) recoverMic(); });
 
     running = true; cryMs = 0; lastT = performance.now();
+    calUntil = lastT + 3000;
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
     logEvent("開始監聽（" + (trigMode.value === "fuss" ? "哭泣＋哀叫" : "僅哭泣") + "，靈敏度 " + sens.value + "%）");
@@ -635,6 +636,7 @@
 
   let alertTimer = null;
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
+  let calUntil = 0;      // 開始監聽後的校準期：快速學習背景噪音，期間不觸發
 
   function stopAlert() {
     if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
@@ -735,7 +737,7 @@
       if (!t || t.readyState === "ended") recoverMic();
     }
 
-    updateNoiseFloor(db, dt);
+    updateNoiseFloor(db, dt, now < calUntil);
     const fuss = trigMode.value === "fuss";
     // 哀叫通常比大哭小聲，哀叫模式音量門檻再放低 5dB
     const loud = db > Math.max(-68, noiseFloor + loudMarginDb() - (fuss ? 5 : 0));
@@ -752,8 +754,8 @@
     const cryLike = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
-    if (!alerting && now < cooldownUntil) {
-      cryMs = 0; burstMs = 0; burstTimes.length = 0; // 冷靜期：不累積、不觸發
+    if (!alerting && (now < cooldownUntil || now < calUntil)) {
+      cryMs = 0; burstMs = 0; burstTimes.length = 0; // 冷靜期／校準期：不累積、不觸發
     } else if (!alerting) {
       if (cryLike) { cryMs += dt; burstMs += dt; }
       else {
