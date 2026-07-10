@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v17</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v18</span></div>
 
   <div class="card">
     <div class="status">
@@ -524,7 +524,7 @@
     freqData = new Uint8Array(analyser.frequencyBinCount);
     timeData = new Float32Array(analyser.fftSize);
     const track = stream.getAudioTracks()[0];
-    if (track) track.addEventListener("ended", () => { if (running) recoverMic(); });
+    if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
 
     running = true; cryMs = 0; lastT = performance.now();
     calUntil = lastT + 3000;
@@ -537,21 +537,26 @@
 
   // iOS 在播放前後或系統音訊事件時，可能收回麥克風或暫停音訊引擎且不自行恢復——自動重連
   let recovering = false;
-  async function recoverMic() {
-    if (recovering || !running) return;
+  async function recoverMic(silent) {
+    if (recovering || !running || alerting) return;
+    const t0 = stream && stream.getAudioTracks()[0];
+    if (t0 && t0.readyState === "live") return; // 麥克風還活著就不用重連
     recovering = true;
-    setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
+    if (!silent) setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
       });
+      if (!running) { stream.getTracks().forEach(t => t.stop()); recovering = false; return; } // 等待期間被停止
       if (source) source.disconnect();
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
       const track = stream.getAudioTracks()[0];
-      if (track) track.addEventListener("ended", () => { if (running) recoverMic(); });
-      if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
-      logEvent("麥克風中斷後已自動重連");
+      if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
+      if (!silent) {
+        if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
+        logEvent("麥克風中斷後已自動重連");
+      }
     } catch (e) {
       setStatus("alert", "麥克風被關閉且無法自動恢復", "請按「停止」後重新開始監聽");
       logEvent("⚠️ 麥克風中斷且無法自動恢復");
@@ -574,8 +579,8 @@
   });
 
   function stop() {
+    running = false;          // 先標記停止，避免 stopAlert 觸發的麥克風重連又把麥克風打開
     if (alerting) stopAlert(); // 停止監聽時也停掉正在播放的警報音
-    running = false;
     if (rafId) cancelAnimationFrame(rafId);
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (source) { source.disconnect(); source = null; } // AudioContext 留給播放共用，不關閉
@@ -645,7 +650,11 @@
     player.loop = false;
     if (!player.paused) player.pause();
     resetGain();
-    if (running && was) { setStatus("listening", "監聽中…", "已回到偵測狀態"); logEvent("警報結束，回到監聽"); }
+    if (running && was) {
+      setStatus("listening", "監聽中…", "已回到偵測狀態");
+      logEvent("警報結束，回到監聽");
+      recoverMic(true); // 重新取回播放期間暫停的麥克風
+    }
   }
   player.addEventListener("ended", () => { if (alerting) stopAlert(); });
   // 手動按播放器的暫停也視為解除警報（stopAlert 自己觸發的 pause 進不來：alerting 已為 false）
@@ -685,6 +694,9 @@
         setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
         beep();
       });
+      // 播放期間暫停麥克風：iOS 同時錄音＋播放會切成「通話模式」處理輸出，
+      // 經 AirPlay/藍牙就成了雜訊。警報結束後由 stopAlert 自動重連。
+      if (stream) stream.getTracks().forEach(t => t.stop());
     } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
