@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v14</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v15</span></div>
 
   <div class="card">
     <div class="status">
@@ -249,7 +249,8 @@
   let freqData, timeData;
   let running = false, alerting = false;
   let cryMs = 0, lastT = 0, lastWatchdog = 0;
-  let burstMs = 0, burstTimes = []; // 哀叫模式：短聲（≥150ms 的嬰兒聲）發生時刻
+  let burstMs = 0, burstTimes = []; // 哀叫模式：短聲（≥100ms 的嬰兒聲）發生時刻
+  let stat = null; // 每 10 秒的診斷統計：有聲音卻沒觸發時自動寫入事件紀錄
 
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn");
   dlBtn.addEventListener("click", () => {
@@ -736,7 +737,9 @@
     const adultVoice = pe.r > 0.35 && pe.f0 > 0 && pe.f0 < 220;
     // 沙啞尖叫（hyperphonation/dysphonation）週期性弱，用頻譜條件備援
     const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > (fuss ? 30 : 40) && ratio > (fuss ? 0.3 : 0.35);
-    const cryLike = loud && !adultVoice && (babyPitch || spectralCry);
+    // 基頻明確是嬰兒聲時，本身就是強證據——哀叫模式下只需比背景稍大聲即可
+    const weakLoud = db > Math.max(-70, noiseFloor + 2);
+    const cryLike = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     if (!alerting) {
@@ -766,6 +769,23 @@
     floorVal.textContent = noiseFloor.toFixed(0) + " dB";
     f0Val.textContent = pe.r > 0.35 && pe.f0 > 0 ? pe.f0.toFixed(0) + " Hz" : "無週期";
     burstVal.textContent = fuss ? burstTimes.length + " / 2" : "（哀叫模式未開）";
+    // 診斷統計：每 10 秒彙整一次；期間有明顯聲音卻沒觸發時，寫入事件紀錄供調校
+    if (!stat) stat = { t0: now, n: 0, loud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestR: 0, bestF0: 0 };
+    stat.n++;
+    if (loud) stat.loud++;
+    if (babyPitch) stat.baby++;
+    if (spectralCry) stat.spec++;
+    if (adultVoice) stat.adult++;
+    if (db > stat.maxDb) stat.maxDb = db;
+    if (pe.r > stat.bestR) { stat.bestR = pe.r; stat.bestF0 = pe.f0; }
+    if (now - stat.t0 > 10000) {
+      if (stat.loud > 5 && !alerting) {
+        const pc = k => Math.round(stat[k] / stat.n * 100) + "%";
+        logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜最強週期 F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2));
+      }
+      stat = null;
+    }
+
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
     frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
     condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (babyPitch ? "嬰兒基頻✓" : "嬰兒基頻✗") + " " + (spectralCry ? "頻譜✓" : "頻譜✗") + (adultVoice ? " 🚫大人聲" : "");
