@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v22</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v23</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -648,16 +648,16 @@
   keepCk.checked = localStorage.getItem("keepalive") === "1";
   let keeper = null, keeperWant = false;
   function keepWavUrl() {
-    // 極微弱 40Hz 正弦波（約 -48dBFS）：人耳與小喇叭幾乎聽不見，
-    // 但對音響是「持續有內容」的訊號——純無聲會觸發許多音響的自動關機
-    const sr = 8000, n = sr * 10, amp = 130;
+    // 極微弱 17.5kHz 正弦波：成人聽不到，且完全在偵測分析頻帶之外（不會自我觸發）；
+    // 對音響是「持續有內容」的訊號——純無聲會觸發許多音響的自動關機
+    const sr = 44100, n = sr * 10, amp = 330, f = 17500;
     const b = new DataView(new ArrayBuffer(44 + n * 2));
     const w8 = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
     w8(0, "RIFF"); b.setUint32(4, 36 + n * 2, true); w8(8, "WAVE"); w8(12, "fmt ");
     b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
     b.setUint32(24, sr, true); b.setUint32(28, sr * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
     w8(36, "data"); b.setUint32(40, n * 2, true);
-    for (let i = 0; i < n; i++) b.setInt16(44 + i * 2, Math.round(amp * Math.sin(2 * Math.PI * 40 * i / sr)), true);
+    for (let i = 0; i < n; i++) b.setInt16(44 + i * 2, Math.round(amp * Math.sin(2 * Math.PI * f * i / sr)), true);
     return URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
   }
   function keeperOn() {
@@ -761,17 +761,18 @@
       } else {
         setStatus("alert", "偵測到哭聲！播放中…", "");
       }
-      player.currentTime = 0;
-      player.play().catch(() => {
-        setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
-        beep();
-      });
-      // 播放期間暫停麥克風：iOS 同時錄音＋播放會切成「通話模式」處理輸出，
-      // 經 AirPlay/藍牙就成了雜訊。警報結束後由 stopAlert 自動重連。
+      // 先關麥克風、稍候再播放：iOS 在錄音期間常把輸出路由留在手機喇叭，
+      // 順序顛倒會讓警報從手機而非藍牙／AirPlay 音響出聲。
+      // （錄音＋播放同時進行也會使輸出被切成通話模式而劣化——同一箭雙鵰）
       if (stream) stream.getTracks().forEach(t => t.stop());
-      // 相容模式下播放不走 Web Audio，把麥克風的音訊引擎也整個休眠，
-      // 讓 iOS 工作階段完全等同純播放（與 YouTube App 相同路徑）
       if (compatCk.checked && audioCtx && audioCtx.state === "running") audioCtx.suspend();
+      setTimeout(() => {
+        player.currentTime = 0;
+        player.play().catch(() => {
+          setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
+          beep();
+        });
+      }, 350); // 給 iOS 一點時間把音訊路由切回音響
     } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
