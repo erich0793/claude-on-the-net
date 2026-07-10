@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v18</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v19</span></div>
 
   <div class="card">
     <div class="status">
@@ -548,6 +548,7 @@
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
       });
       if (!running) { stream.getTracks().forEach(t => t.stop()); recovering = false; return; } // 等待期間被停止
+      if (audioCtx.state !== "running") await audioCtx.resume(); // 喚醒播放期間休眠的引擎
       if (source) source.disconnect();
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
@@ -572,7 +573,7 @@
   document.addEventListener("visibilitychange", () => {
     if (running && document.visibilityState === "visible") {
       requestWake();
-      if (audioCtx && audioCtx.state !== "running") audioCtx.resume().catch(() => {});
+      if (audioCtx && audioCtx.state !== "running" && !(alerting && compatCk.checked)) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
     }
@@ -697,6 +698,9 @@
       // 播放期間暫停麥克風：iOS 同時錄音＋播放會切成「通話模式」處理輸出，
       // 經 AirPlay/藍牙就成了雜訊。警報結束後由 stopAlert 自動重連。
       if (stream) stream.getTracks().forEach(t => t.stop());
+      // 相容模式下播放不走 Web Audio，把麥克風的音訊引擎也整個休眠，
+      // 讓 iOS 工作階段完全等同純播放（與 YouTube App 相同路徑）
+      if (compatCk.checked && audioCtx && audioCtx.state === "running") audioCtx.suspend();
     } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
@@ -744,7 +748,8 @@
     // 看門狗：每 3 秒檢查音訊引擎與麥克風是否被系統收走，必要時自動恢復
     if (now - lastWatchdog > 3000) {
       lastWatchdog = now;
-      if (audioCtx.state !== "running") audioCtx.resume().catch(() => {});
+      // 相容模式的警報播放期間，引擎是刻意休眠的，不要喚醒
+      if (audioCtx.state !== "running" && !(alerting && compatCk.checked)) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
     }
