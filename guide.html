@@ -1,0 +1,97 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>使用說明 - 嬰兒哭聲偵測播放器</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171c24; --panel-2: #1f2732; --line: #2a3340;
+    --text: #e7edf3; --muted: #97a3b2; --accent: #4dabf7; --accent-2: #7c5cff;
+    --danger: #ff5c72; --ok: #3ddc84;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+    background: radial-gradient(1200px 800px at 70% -10%, #1a2130 0%, var(--bg) 55%);
+    color: var(--text); min-height: 100vh; padding: 24px 16px 60px;
+    line-height: 1.85; font-size: 15px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  h2 { font-size: 17px; margin: 28px 0 10px; padding-left: 10px; border-left: 4px solid var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-bottom: 16px; }
+  a { color: var(--accent); }
+  a.btnlink { display: inline-block; font-size: 14px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); text-decoration: none; margin-bottom: 16px; }
+  a.btnlink:hover { border-color: var(--accent); }
+  .muted { color: var(--muted); }
+  ol li, ul li { margin-bottom: 8px; }
+  b { color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  code { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; font-size: 13px; }
+  .tip { background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid var(--ok); border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 14px; }
+</style>
+
+<div class="wrap">
+  <a class="btnlink" href="index.html">← 回到偵測器</a>
+  <h1>📖 使用說明</h1>
+
+  <div class="card">
+    <h2 style="margin-top:0">三分鐘上手</h2>
+    <ol>
+      <li><b>選音檔</b>：點「📁 選擇音檔」，挑一首安撫音樂（白噪音、搖籃曲都可以）。選過一次就會記住，之後免重選。</li>
+      <li><b>剪短（建議）</b>：選檔後會出現「✂️ 剪短音檔」，取 1～5 分鐘就夠——播放時長靠「循環」設定補足，檔案小系統更穩。</li>
+      <li><b>開始監聽</b>：按「🎙️ 開啟麥克風並開始監聽」，允許麥克風權限。狀態燈變成綠色呼吸＝正在監聽。</li>
+      <li><b>擺放</b>：手機插電、螢幕保持開啟、麥克風朝向寶寶，距離 1～2 公尺內最好。</li>
+    </ol>
+    <div class="tip">💡 想先確認會不會動：開始監聽後，播一段嬰兒哭聲影片（用另一台裝置），幾秒內應該就會觸發播放。</div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">設定怎麼選</h2>
+    <table>
+      <tr><th>設定</th><th>建議</th></tr>
+      <tr><td><b>觸發條件</b></td><td>「哭泣＋哀叫」＝寶寶開始盧（哎個兩聲）就播，提早安撫；「僅哭泣」＝真的哭出來才播，誤觸少。</td></tr>
+      <tr><td><b>靈敏度</b></td><td>從 55～75% 開始。漏接→往右；半夜亂觸發→往左。</td></tr>
+      <tr><td><b>需持續時間</b></td><td>持續哭聲要累積多久才觸發。預設 1 秒即可。</td></tr>
+      <tr><td><b>觸發後播放時長</b></td><td>短音檔會自動循環到選定的時間（例如循環 30 分鐘），播完自動回到監聽。</td></tr>
+      <tr><td><b>結束時音量</b></td><td>哄睡淡出：播放期間音量逐漸變小，例如 30 分鐘後降到 50% 或無聲。<span class="muted">（AirPlay 相容模式下停用）</span></td></tr>
+      <tr><td><b>音響相容模式</b></td><td>用 <b>AirPlay</b> 連音響時必須開啟，聲音才出得去；用<b>藍牙</b>或手機喇叭則不用開。</td></tr>
+      <tr><td><b>保持音響連線</b></td><td>整晚掛機時開啟：持續播放無聲音軌，防止音響閒置斷線／自動關機。</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">整晚掛機檢查清單</h2>
+    <ul>
+      <li>手機<b>插著電源</b></li>
+      <li>iPhone：設定 → 螢幕顯示與亮度 → <b>自動鎖定 → 永不</b>；關閉<b>低電量模式</b>；開<b>勿擾模式</b>（來電會中斷偵測）</li>
+      <li>Safari 網址列「大小」(aA) → 網站設定 → <b>麥克風 → 允許</b>（播放結束重連麥克風時才不會再跳詢問）</li>
+      <li>網頁保持在<b>前景</b>（不要切去別的 App）</li>
+      <li>連音響的話：優先用<b>藍牙</b>；AirPlay 記得開「音響相容模式」；並開「保持音響連線」</li>
+      <li>隔天早上看「📋 事件紀錄」——半夜每次觸發、每個狀況都有時間戳</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">疑難排解</h2>
+    <table>
+      <tr><th>狀況</th><th>解法</th></tr>
+      <tr><td>哭了沒觸發</td><td>靈敏度往右調；改選「哭泣＋哀叫」；手機靠近一點。事件紀錄的「診斷：」行會顯示原因（哪個條件沒過）。</td></tr>
+      <tr><td>沒哭卻觸發</td><td>看事件紀錄觸發原因：短聲誤觸→靈敏度往左或改「僅哭泣」；大人講話一般會被自動排除（顯示🚫大人聲）。</td></tr>
+      <tr><td>AirPlay 沒聲音</td><td>開「音響相容模式」。</td></tr>
+      <tr><td>音響出來是雜音</td><td>確認已開「音響相容模式」；仍有雜音改用藍牙連接。</td></tr>
+      <tr><td>播放停不下來</td><td>按「⏹ 停止播放」或播放器的暫停鍵；手動停止後 30 秒內不會重新觸發。</td></tr>
+      <tr><td>選不到音檔（灰色）</td><td>按「選不到檔案？改用不過濾的選擇器」；確認檔案已下載到「檔案」App（雲朵圖示要先點開下載）。</td></tr>
+      <tr><td>麥克風一直要求授權</td><td>Safari 的 aA 選單 → 網站設定 → 麥克風 → 允許。</td></tr>
+      <tr><td>換手機使用</td><td>舊手機按「⬇️ 下載目前音檔」→ AirDrop 給新手機 → 新手機選一次即可。</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">隱私</h2>
+    <p class="muted" style="margin:0">麥克風的聲音只在你的裝置上即時分析，<b>不錄音、不儲存、不上傳</b>；音檔與事件紀錄也只存在本機瀏覽器。頁面載入後即使斷網也能運作——不放心可以開飛航模式驗證。此工具為輔助性質，並非醫療器材，請勿取代照顧者的注意。</p>
+  </div>
+
+  <a class="btnlink" href="index.html">← 回到偵測器</a>
+</div>

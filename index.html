@@ -82,35 +82,39 @@
   audio { width: 100%; margin-top: 10px; }
   .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
   a { color: var(--accent); }
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  a.btnlink { font-size: 13px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); text-decoration: none; white-space: nowrap; }
+  a.btnlink:hover { border-color: var(--accent); }
+  .stept { font-size: 15px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .stepn { width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .sect { font-size: 12px; color: var(--muted); letter-spacing: 2px; margin: 18px 0 6px; }
+  details { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
+  summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 </style>
 
 <div class="wrap">
-  <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v20</span></div>
+  <div class="topbar">
+    <h1>👶 嬰兒哭聲偵測播放器</h1>
+    <a class="btnlink" href="guide.html">📖 使用說明</a>
+  </div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v21</span></div>
 
   <div class="card">
-    <div class="status">
-      <span class="dot" id="dot"></span>
-      <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
-    </div>
-
+    <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
     <div class="row">
-      <button class="primary" id="startBtn">🎙️ 開啟麥克風並開始監聽</button>
-      <button class="danger" id="stopBtn" disabled>停止</button>
-      <button id="testBtn" disabled>▶️ 試聽音檔</button>
-    </div>
-
-    <div class="row" style="margin-top:12px">
-      <label class="file">📁 選擇警報音檔（MP3）
+      <label class="file">📁 選擇音檔
         <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac" />
       </label>
-      <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
-      <input type="file" id="anyFileInput" style="display:none" />
       <span class="tag" id="fileName">尚未選擇檔案</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="testBtn" disabled>▶️ 試聽音檔</button>
       <button id="dlBtn" style="display:none">⬇️ 下載目前音檔</button>
       <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
+      <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
+      <input type="file" id="anyFileInput" style="display:none" />
     </div>
-    <div class="hint" style="margin-top:8px">選過的音檔會自動記在這台裝置的瀏覽器裡，下次打開免重選；音檔不會上傳到任何地方。</div>
+    <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
 
     <div id="trimBox" style="display:none; margin-top:14px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--panel-2)">
       <div style="font-size:14px; font-weight:600; margin-bottom:10px">✂️ 剪短音檔（在你的裝置上處理，不會上傳）</div>
@@ -132,29 +136,43 @@
   </div>
 
   <div class="card">
-    <canvas id="viz" width="700" height="90"></canvas>
+    <div class="stept"><span class="stepn">2</span>開始監聽</div>
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="startBtn" style="font-size:16px; padding:14px 20px">🎙️ 開啟麥克風並開始監聽</button>
+      <button class="danger" id="stopBtn" disabled>停止</button>
+    </div>
     <div class="meters">
       <div>
         <div class="meter-label"><span>目前音量</span><span id="volVal">–</span></div>
         <div class="bar vol"><i id="volBar"></i></div>
       </div>
       <div>
-        <div class="meter-label"><span>哭聲吻合度（累積）</span><span id="scoreVal">0%</span></div>
+        <div class="meter-label"><span>哭聲吻合度（累積滿即觸發）</span><span id="scoreVal">0%</span></div>
         <div class="bar score"><i id="scoreBar"></i></div>
       </div>
     </div>
-    <div class="kv">
-      <span>主頻率 <b id="freqVal">– Hz</b></span>
-      <span>基頻(F0) <b id="f0Val">–</b></span>
-      <span>語音頻帶佔比 <b id="ratioVal">–</b></span>
-      <span>背景噪音 <b id="floorVal">–</b></span>
-      <span>短聲計數 <b id="burstVal">–</b></span>
-      <span>狀態 <b id="frameVal">閒置</b></span>
-      <span>條件 <b id="condVal">–</b></span>
-    </div>
+    <details style="margin-top:14px">
+      <summary>📊 詳細偵測數據（調校時看這裡）</summary>
+      <canvas id="viz" width="700" height="90" style="margin-top:10px"></canvas>
+      <div class="kv">
+        <span>主頻率 <b id="freqVal">– Hz</b></span>
+        <span>基頻(F0) <b id="f0Val">–</b></span>
+        <span>語音頻帶佔比 <b id="ratioVal">–</b></span>
+        <span>背景噪音 <b id="floorVal">–</b></span>
+        <span>短聲計數 <b id="burstVal">–</b></span>
+        <span>狀態 <b id="frameVal">閒置</b></span>
+        <span>條件 <b id="condVal">–</b></span>
+      </div>
+    </details>
   </div>
 
   <div class="card">
+    <div class="stept"><span class="stepn">3</span>設定（預設值可直接用，之後再微調）</div>
+    <div class="sect">偵 測</div>
     <div class="ctl">
       <label><span>觸發條件</span></label>
       <select id="trigMode" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
@@ -170,7 +188,8 @@
       <label><span>需持續時間（毫秒，避免瞬間雜音誤觸）</span><span id="durVal"></span></label>
       <input type="range" id="dur" min="300" max="4000" step="100" value="1000" />
     </div>
-    <div class="ctl" style="margin-top:14px">
+    <div class="sect">播 放</div>
+    <div class="ctl">
       <label><span>觸發後播放時長（音檔較短會自動循環）</span></label>
       <select id="playDur" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="once">播完一次就停</option>
@@ -191,15 +210,25 @@
         <option value="0">淡出到無聲</option>
       </select>
     </div>
-    <div class="ctl" style="margin-top:14px">
+    <div class="sect">音響 / 連線</div>
+    <div class="ctl">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
         <input type="checkbox" id="compatCk" style="accent-color:var(--accent)">
         <span>音響相容模式：AirPlay 聽不到聲音時開啟（淡出功能會停用；改用藍牙連音響則不需開啟）</span>
       </label>
     </div>
-    <div class="hint" style="margin-top:14px">
-      偵測原理：<b style="color:var(--text)">音量需高出背景噪音一定幅度</b>（自動適應環境與手機），並以自相關法量測<b style="color:var(--text)">基頻（F0）</b>——嬰兒哭聲基頻約 250–1000 Hz、大人講話僅 85–255 Hz，偵測到大人聲會主動排除；沙啞尖叫另以頻譜條件判斷。「哇—換氣—哇」的間隙會保留累積進度，累積夠久才觸發。上方「條件」會即時顯示三項各自是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
+    <div class="ctl" style="margin-top:12px">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="keepCk" style="accent-color:var(--accent)">
+        <span>🔗 保持音響連線：監聽期間持續播放無聲音軌，防止 AirPlay／藍牙閒置斷線或音響自動關機</span>
+      </label>
     </div>
+    <details style="margin-top:16px">
+      <summary>🧠 偵測原理</summary>
+      <div class="hint" style="margin-top:8px">
+        <b style="color:var(--text)">音量需高出背景噪音一定幅度</b>（自動適應環境與手機），並以自相關法量測<b style="color:var(--text)">基頻（F0）</b>——嬰兒哭聲基頻約 250–1000 Hz、大人講話僅 85–255 Hz，偵測到大人聲會主動排除；沙啞尖叫另以頻譜條件判斷。「哇—換氣—哇」的間隙會保留累積進度，累積夠久才觸發。「詳細偵測數據」的「條件」會即時顯示各項是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
+      </div>
+    </details>
   </div>
 
   <div class="card">
@@ -209,10 +238,7 @@
   </div>
 
   <div class="card hint">
-    <b style="color:var(--text)">使用須知</b><br>
-    • 瀏覽器基於安全限制，麥克風只能在 <b>https://</b> 或 <b>localhost</b> 下使用。若直接用 <code>file://</code> 打開可能無法取得麥克風，建議在此資料夾執行 <code>python3 -m http.server</code> 後開啟 <a href="http://localhost:8000">http://localhost:8000</a>。<br>
-    • 偵測期間本頁不會把麥克風的聲音輸出到喇叭，只會分析，不會有回授。<br>
-    • 觸發播放時會暫停偵測直到音檔播放結束，避免警報音本身造成連續觸發。
+    <b style="color:var(--text)">隱私與運作</b>：麥克風的聲音只在這台裝置上即時分析，<b style="color:var(--text)">不錄音、不儲存、不上傳</b>；載入後斷網也能運作。觸發播放時會暫停偵測與麥克風，播完自動恢復。完整操作步驟、設定建議與疑難排解請見 <a href="guide.html">📖 使用說明</a>。
   </div>
 </div>
 
@@ -499,6 +525,7 @@
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
     unlockAudio();
     ensurePlayGraph();
+    keeperOn();
     try {
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
       stream = await navigator.mediaDevices.getUserMedia({
@@ -587,6 +614,7 @@
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (source) { source.disconnect(); source = null; } // AudioContext 留給播放共用，不關閉
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    keeperOff();
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
     logEvent("停止監聽");
@@ -612,6 +640,37 @@
   compatCk.addEventListener("change", () => {
     localStorage.setItem("compat", compatCk.checked ? "1" : "0");
     location.reload();
+  });
+
+  // 保持音響連線：監聽期間循環播放 1 秒的無聲音軌（數位零訊號，喇叭不出聲），
+  // 讓 AirPlay／藍牙路由與音響不因閒置而斷線或自動關機
+  const keepCk = $("keepCk");
+  keepCk.checked = localStorage.getItem("keepalive") === "1";
+  let keeper = null;
+  function silentWavUrl() {
+    const sr = 8000, n = sr; // 1 秒靜音
+    const b = new DataView(new ArrayBuffer(44 + n * 2));
+    const w8 = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
+    w8(0, "RIFF"); b.setUint32(4, 36 + n * 2, true); w8(8, "WAVE"); w8(12, "fmt ");
+    b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
+    b.setUint32(24, sr, true); b.setUint32(28, sr * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
+    w8(36, "data"); b.setUint32(40, n * 2, true);
+    return URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
+  }
+  function keeperOn() {
+    if (!keepCk.checked) return;
+    if (!keeper) {
+      keeper = new Audio(silentWavUrl());
+      keeper.loop = true;
+      keeper.setAttribute("x-webkit-airplay", "allow");
+    }
+    keeper.play().catch(() => {});
+  }
+  function keeperOff() { if (keeper) keeper.pause(); }
+  keepCk.addEventListener("change", () => {
+    localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
+    if (keepCk.checked && running) keeperOn(); else keeperOff();
+    logEvent(keepCk.checked ? "已開啟保持音響連線" : "已關閉保持音響連線");
   });
 
   const trigMode = $("trigMode");
