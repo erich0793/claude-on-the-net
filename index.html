@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v12</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v13</span></div>
 
   <div class="card">
     <div class="status">
@@ -159,7 +159,7 @@
       <label><span>觸發條件</span></label>
       <select id="trigMode" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="cry">1. 哭泣才觸發（持續哭聲累積夠久）</option>
-        <option value="fuss">2. 哭泣＋哀叫都觸發（15 秒內 3 聲短促哎叫也算）</option>
+        <option value="fuss">2. 哭泣＋哀叫都觸發（20 秒內 2 聲短促哎叫也算）</option>
       </select>
     </div>
     <div class="ctl" style="margin-top:14px">
@@ -196,6 +196,12 @@
     </div>
   </div>
 
+  <div class="card">
+    <div style="font-size:14px; font-weight:600; margin-bottom:8px">📋 事件紀錄（存在本機，重開網頁仍在）</div>
+    <div id="logBox" style="font-family:ui-monospace,SFMono-Regular,monospace; font-size:12px; color:var(--muted); max-height:200px; overflow-y:auto; line-height:1.9"></div>
+    <div class="row" style="margin-top:10px"><button id="clearLogBtn" style="font-size:12px; padding:6px 12px">清除紀錄</button></div>
+  </div>
+
   <div class="card hint">
     <b style="color:var(--text)">使用須知</b><br>
     • 瀏覽器基於安全限制，麥克風只能在 <b>https://</b> 或 <b>localhost</b> 下使用。若直接用 <code>file://</code> 打開可能無法取得麥克風，建議在此資料夾執行 <code>python3 -m http.server</code> 後開啟 <a href="http://localhost:8000">http://localhost:8000</a>。<br>
@@ -214,6 +220,24 @@
   const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal"), f0Val = $("f0Val"), burstVal = $("burstVal");
   const sens = $("sens"), dur = $("dur"), sensVal = $("sensVal"), durVal = $("durVal");
   const canvas = $("viz"), ctx = canvas.getContext("2d");
+
+  // --- 事件紀錄：留存於 localStorage，隔天可回顧半夜發生了什麼 ---
+  const logBox = $("logBox");
+  let logArr = [];
+  try { logArr = JSON.parse(localStorage.getItem("evlog") || "[]"); } catch (e) {}
+  function renderLog() {
+    logBox.innerHTML = logArr.slice().reverse().map(l => l.replace(/</g, "&lt;")).join("<br>") || "（尚無紀錄）";
+  }
+  function logEvent(msg) {
+    const t = new Date();
+    const pad = n => (n < 10 ? "0" : "") + n;
+    logArr.push(pad(t.getMonth() + 1) + "/" + pad(t.getDate()) + " " + pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds()) + "　" + msg);
+    if (logArr.length > 200) logArr = logArr.slice(-200);
+    try { localStorage.setItem("evlog", JSON.stringify(logArr)); } catch (e) {}
+    renderLog();
+  }
+  $("clearLogBtn").addEventListener("click", () => { logArr = []; localStorage.removeItem("evlog"); renderLog(); });
+  renderLog();
 
   let audioCtx, analyser, source, stream, rafId;
   let freqData, timeData;
@@ -483,6 +507,7 @@
     running = true; cryMs = 0; lastT = performance.now();
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
+    logEvent("開始監聽（" + (trigMode.value === "fuss" ? "哭泣＋哀叫" : "僅哭泣") + "，靈敏度 " + sens.value + "%）");
     requestWake();
     loop();
   }
@@ -503,8 +528,10 @@
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running) recoverMic(); });
       if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
+      logEvent("麥克風中斷後已自動重連");
     } catch (e) {
       setStatus("alert", "麥克風被關閉且無法自動恢復", "請按「停止」後重新開始監聽");
+      logEvent("⚠️ 麥克風中斷且無法自動恢復");
     }
     recovering = false;
   }
@@ -531,6 +558,7 @@
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
+    logEvent("停止監聽");
     volBar.style.width = "0%"; scoreBar.style.width = "0%";
   }
 
@@ -580,15 +608,16 @@
     player.loop = false;
     if (!player.paused) player.pause();
     resetGain();
-    if (running && was) setStatus("listening", "監聽中…", "已回到偵測狀態");
+    if (running && was) { setStatus("listening", "監聽中…", "已回到偵測狀態"); logEvent("警報結束，回到監聽"); }
   }
   player.addEventListener("ended", () => { if (alerting) stopAlert(); });
   // 手動按播放器的暫停也視為解除警報
   player.addEventListener("pause", () => { if (alerting && !player.ended) stopAlert(); });
 
-  function trigger() {
+  function trigger(reason) {
     if (alerting) return;
     alerting = true; cryMs = 0; burstMs = 0; burstTimes = [];
+    logEvent("🔊 觸發播放（" + (reason || "手動") + "）");
     if (player.src) {
       const mins = playDur.value;
       ensurePlayGraph();
@@ -668,25 +697,29 @@
     // 哀叫通常比大哭小聲，哀叫模式音量門檻再放低 5dB
     const loud = db > Math.max(-68, noiseFloor + loudMarginDb() - (fuss ? 5 : 0));
     const pe = estimatePitch();
-    // 嬰兒哭聲：基頻 250–1000Hz 且振動有週期性
-    const babyPitch = pe.r > 0.35 && pe.f0 >= 250 && pe.f0 <= 1000;
-    // 大人講話：有週期性但基頻低於 230Hz —— 明確排除，減少誤報
-    const adultVoice = pe.r > 0.35 && pe.f0 > 0 && pe.f0 < 230;
+    // 嬰兒哭聲：基頻 250–1000Hz 且振動有週期性；哀叫聲較輕短，哀叫模式全面放寬
+    const rTh = fuss ? 0.3 : 0.35;
+    const babyPitch = pe.r > rTh && pe.f0 >= (fuss ? 230 : 250) && pe.f0 <= 1100;
+    // 大人講話：有週期性但基頻低於 220Hz —— 明確排除，減少誤報
+    const adultVoice = pe.r > 0.35 && pe.f0 > 0 && pe.f0 < 220;
     // 沙啞尖叫（hyperphonation/dysphonation）週期性弱，用頻譜條件備援
-    const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > 40 && ratio > 0.35;
+    const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > (fuss ? 30 : 40) && ratio > (fuss ? 0.3 : 0.35);
     const cryLike = loud && !adultVoice && (babyPitch || spectralCry);
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     if (!alerting) {
       if (cryLike) { cryMs += dt; burstMs += dt; }
       else {
-        if (burstMs >= 150) burstTimes.push(now); // 一段短促嬰兒聲結束，記一筆
+        if (burstMs >= 100) { // 一段短促嬰兒聲結束，記一筆
+          burstTimes.push(now);
+          logEvent("偵測到短聲（20 秒內第 " + burstTimes.length + " 聲）");
+        }
         burstMs = 0;
         cryMs = Math.max(0, cryMs - dt * 0.6);
       }
-      while (burstTimes.length && now - burstTimes[0] > 15000) burstTimes.shift();
-      if (cryMs >= +dur.value) trigger();                     // 持續哭聲
-      else if (fuss && burstTimes.length >= 3) trigger();     // 15 秒內 3 聲哀叫
+      while (burstTimes.length && now - burstTimes[0] > 20000) burstTimes.shift();
+      if (cryMs >= +dur.value) trigger("持續哭聲");                 // 持續哭聲
+      else if (fuss && burstTimes.length >= 2) trigger("短聲達標"); // 20 秒內 2 聲哀叫
     }
 
     // 5) UI 更新
@@ -700,7 +733,7 @@
     ratioVal.textContent = (ratio * 100).toFixed(0) + "%";
     floorVal.textContent = noiseFloor.toFixed(0) + " dB";
     f0Val.textContent = pe.r > 0.35 && pe.f0 > 0 ? pe.f0.toFixed(0) + " Hz" : "無週期";
-    burstVal.textContent = fuss ? burstTimes.length + " / 3" : "（哀叫模式未開）";
+    burstVal.textContent = fuss ? burstTimes.length + " / 2" : "（哀叫模式未開）";
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
     frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
     condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (babyPitch ? "嬰兒基頻✓" : "嬰兒基頻✗") + " " + (spectralCry ? "頻譜✓" : "頻譜✗") + (adultVoice ? " 🚫大人聲" : "");
