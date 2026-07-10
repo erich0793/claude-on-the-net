@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v24</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v25</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -220,7 +220,7 @@
     <div class="ctl" style="margin-top:12px">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
         <input type="checkbox" id="keepCk" style="accent-color:var(--accent)">
-        <span>🔗 保持音響連線：監聽期間持續播放無聲音軌，防止 AirPlay／藍牙閒置斷線或音響自動關機</span>
+        <span>🔗 保持音響連線：每 4 分鐘向音響發送 3 秒聽不見的保連訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機</span>
       </label>
     </div>
     <details style="margin-top:16px">
@@ -563,7 +563,7 @@
   // iOS 在播放前後或系統音訊事件時，可能收回麥克風或暫停音訊引擎且不自行恢復——自動重連
   let recovering = false;
   async function recoverMic(silent) {
-    if (recovering || !running || alerting) return;
+    if (recovering || !running || alerting || pulsing) return;
     const t0 = stream && stream.getAudioTracks()[0];
     if (t0 && t0.readyState === "live") return; // 麥克風還活著就不用重連
     recovering = true;
@@ -648,7 +648,10 @@
   // 讓 AirPlay／藍牙路由與音響不因閒置而斷線或自動關機
   const keepCk = $("keepCk");
   keepCk.checked = localStorage.getItem("keepalive") === "1";
-  let keeper = null, keeperWant = false;
+  // 脈衝式保連：麥克風開啟期間 iOS 不會把任何網頁聲音送往藍牙／AirPlay（都留在手機），
+  // 連續播放保連音是無效的。改為每 4 分鐘短暫釋放麥克風 3 秒、把保連訊號真正送到音響，
+  // 再自動收回麥克風繼續監聽。
+  let keeper = null, keepTimer = null, pulsing = false;
   function keepWavUrl() {
     // 極微弱 17.5kHz 正弦波：成人聽不到，且完全在偵測分析頻帶之外（不會自我觸發）；
     // 對音響是「持續有內容」的訊號——純無聲會觸發許多音響的自動關機
@@ -668,18 +671,34 @@
       keeper = new Audio(keepWavUrl());
       keeper.loop = true;
       keeper.setAttribute("x-webkit-airplay", "allow");
-      // 被系統暫停（音訊工作階段切換等）時自動恢復，並留下紀錄
-      keeper.addEventListener("pause", () => {
-        if (keeperWant) {
-          logEvent("⚠️ 保連音軌被系統暫停，嘗試恢復");
-          keeper.play().catch(() => logEvent("⚠️ 保連音軌恢復失敗，看門狗將持續重試"));
-        }
-      });
     }
-    keeperWant = true;
-    keeper.play().then(() => logEvent("保連音軌播放中")).catch(() => logEvent("⚠️ 保連音軌啟動失敗"));
+    // 在使用者手勢內先解鎖保連音軌，之後的定時播放才不會被 iOS 擋下
+    keeper.muted = true;
+    const p = keeper.play();
+    if (p) p.then(() => { keeper.pause(); keeper.muted = false; }).catch(() => { keeper.muted = false; });
+    if (!keepTimer) {
+      keepTimer = setInterval(keepPulse, 240000);
+      logEvent("保持連線：每 4 分鐘向音響發送 3 秒保連訊號");
+    }
   }
-  function keeperOff() { keeperWant = false; if (keeper) keeper.pause(); }
+  function keeperOff() {
+    if (keepTimer) { clearInterval(keepTimer); keepTimer = null; }
+    pulsing = false;
+    if (keeper) keeper.pause();
+  }
+  function keepPulse() {
+    if (!running || alerting || recovering || pulsing) return;
+    pulsing = true;
+    // 釋放麥克風 → 等路由切到音響 → 播 3 秒保連訊號 → 收回麥克風
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
+    setTimeout(() => { if (pulsing) keeper.play().catch(() => {}); }, 300);
+    setTimeout(() => {
+      keeper.pause();
+      pulsing = false;
+      if (running && !alerting) recoverMic(true);
+    }, 3300);
+  }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
     if (keepCk.checked && running) keeperOn(); else keeperOff();
@@ -823,11 +842,10 @@
     // 看門狗：每 3 秒檢查音訊引擎與麥克風是否被系統收走，必要時自動恢復
     if (now - lastWatchdog > 3000) {
       lastWatchdog = now;
-      // 警報播放期間麥克風引擎是刻意休眠的，不要喚醒
-      if (audioCtx.state !== "running" && !alerting) audioCtx.resume().catch(() => {});
+      // 警報播放與保連脈衝期間麥克風引擎是刻意休眠的，不要喚醒
+      if (audioCtx.state !== "running" && !alerting && !pulsing) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
-      if (keeperWant && keeper && keeper.paused) keeper.play().catch(() => {}); // 保連音軌重試
     }
 
     updateNoiseFloor(db, dt, now < calUntil);
