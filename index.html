@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v21</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v22</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -646,27 +646,38 @@
   // 讓 AirPlay／藍牙路由與音響不因閒置而斷線或自動關機
   const keepCk = $("keepCk");
   keepCk.checked = localStorage.getItem("keepalive") === "1";
-  let keeper = null;
-  function silentWavUrl() {
-    const sr = 8000, n = sr; // 1 秒靜音
+  let keeper = null, keeperWant = false;
+  function keepWavUrl() {
+    // 極微弱 40Hz 正弦波（約 -48dBFS）：人耳與小喇叭幾乎聽不見，
+    // 但對音響是「持續有內容」的訊號——純無聲會觸發許多音響的自動關機
+    const sr = 8000, n = sr * 10, amp = 130;
     const b = new DataView(new ArrayBuffer(44 + n * 2));
     const w8 = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
     w8(0, "RIFF"); b.setUint32(4, 36 + n * 2, true); w8(8, "WAVE"); w8(12, "fmt ");
     b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
     b.setUint32(24, sr, true); b.setUint32(28, sr * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
     w8(36, "data"); b.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) b.setInt16(44 + i * 2, Math.round(amp * Math.sin(2 * Math.PI * 40 * i / sr)), true);
     return URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
   }
   function keeperOn() {
     if (!keepCk.checked) return;
     if (!keeper) {
-      keeper = new Audio(silentWavUrl());
+      keeper = new Audio(keepWavUrl());
       keeper.loop = true;
       keeper.setAttribute("x-webkit-airplay", "allow");
+      // 被系統暫停（音訊工作階段切換等）時自動恢復，並留下紀錄
+      keeper.addEventListener("pause", () => {
+        if (keeperWant) {
+          logEvent("⚠️ 保連音軌被系統暫停，嘗試恢復");
+          keeper.play().catch(() => logEvent("⚠️ 保連音軌恢復失敗，看門狗將持續重試"));
+        }
+      });
     }
-    keeper.play().catch(() => {});
+    keeperWant = true;
+    keeper.play().then(() => logEvent("保連音軌播放中")).catch(() => logEvent("⚠️ 保連音軌啟動失敗"));
   }
-  function keeperOff() { if (keeper) keeper.pause(); }
+  function keeperOff() { keeperWant = false; if (keeper) keeper.pause(); }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
     if (keepCk.checked && running) keeperOn(); else keeperOff();
@@ -812,6 +823,7 @@
       if (audioCtx.state !== "running" && !(alerting && compatCk.checked)) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
+      if (keeperWant && keeper && keeper.paused) keeper.play().catch(() => {}); // 保連音軌重試
     }
 
     updateNoiseFloor(db, dt, now < calUntil);
