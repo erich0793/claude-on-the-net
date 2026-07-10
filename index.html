@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v23</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v24</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -524,7 +524,7 @@
   async function start() {
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
     unlockAudio();
-    ensurePlayGraph();
+    if (!compatCk.checked && +fadeEnd.value < 1) ensurePlayGraph(); // 僅淡出需要 Web Audio
     keeperOn();
     try {
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
@@ -535,14 +535,11 @@
       setStatus("alert", "無法開啟麥克風", e.message || "請確認已授權，且在 https/localhost 下開啟");
       return;
     }
-    // 與播放共用同一個 AudioContext：iOS 的音訊工作階段較不會在播放前後互相打架。
-    // 相容模式下播放不走 Web Audio，麥克風用自己的（可重用的）AudioContext。
-    if (compatCk.checked) {
-      if (!micCtx) micCtx = new (window.AudioContext || window.webkitAudioContext)();
-      audioCtx = micCtx;
-    } else {
-      audioCtx = playCtx;
-    }
+    // 麥克風一律用自己的（可重用的）AudioContext。播放預設走純播放器輸出——
+    // 在錄音模式下建立的 Web Audio 引擎，其輸出會被 iOS 釘在手機喇叭，
+    // 即使之後關掉麥克風也不會遷移到藍牙／AirPlay；純播放器則會正確路由。
+    if (!micCtx) micCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx = micCtx;
     if (audioCtx.state === "suspended") await audioCtx.resume(); // iOS 有時以暫停狀態啟動
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -601,7 +598,7 @@
   document.addEventListener("visibilitychange", () => {
     if (running && document.visibilityState === "visible") {
       requestWake();
-      if (audioCtx && audioCtx.state !== "running" && !(alerting && compatCk.checked)) audioCtx.resume().catch(() => {});
+      if (audioCtx && audioCtx.state !== "running" && !alerting) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
     }
@@ -630,7 +627,12 @@
   const fadeEnd = $("fadeEnd");
   fadeEnd.value = localStorage.getItem("fadeEnd") || "1";
   if (fadeEnd.selectedIndex < 0) fadeEnd.value = "1";
-  fadeEnd.addEventListener("change", () => localStorage.setItem("fadeEnd", fadeEnd.value));
+  fadeEnd.addEventListener("change", () => {
+    localStorage.setItem("fadeEnd", fadeEnd.value);
+    // 選了淡出才建立播放音訊圖（趁使用者手勢）；注意：建立後播放將經過 Web Audio，
+    // 藍牙路由可能受影響——文件對此有說明
+    if (+fadeEnd.value < 1 && !compatCk.checked) ensurePlayGraph();
+  });
 
   // 音響相容模式：不經 Web Audio 增益節點，讓 AirPlay 能接收播放器輸出。
   // 音訊路由在建立後無法切換，變更時重新載入頁面套用。
@@ -708,8 +710,8 @@
     playGain.gain.cancelScheduledValues(playCtx.currentTime);
     playGain.gain.setValueAtTime(1, playCtx.currentTime);
   }
-  // 手動播放（試聽）時恢復正常音量
-  player.addEventListener("play", () => { if (!alerting) { ensurePlayGraph(); resetGain(); } });
+  // 手動播放（試聽）時恢復正常音量（僅在淡出音訊圖已建立時需要）
+  player.addEventListener("play", () => { if (!alerting) resetGain(); });
 
   let alertTimer = null;
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
@@ -745,7 +747,7 @@
     logEvent("🔊 觸發播放（" + (reason || "手動") + "）");
     if (player.src) {
       const mins = playDur.value;
-      ensurePlayGraph();
+      if (+fadeEnd.value < 1 && !compatCk.checked) ensurePlayGraph();
       resetGain();
       if (mins !== "once") {
         player.loop = true;
@@ -765,7 +767,7 @@
       // 順序顛倒會讓警報從手機而非藍牙／AirPlay 音響出聲。
       // （錄音＋播放同時進行也會使輸出被切成通話模式而劣化——同一箭雙鵰）
       if (stream) stream.getTracks().forEach(t => t.stop());
-      if (compatCk.checked && audioCtx && audioCtx.state === "running") audioCtx.suspend();
+      if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
       setTimeout(() => {
         player.currentTime = 0;
         player.play().catch(() => {
@@ -778,6 +780,7 @@
 
   // 沒有選擇音檔時的備援提示音
   function beep() {
+    if (audioCtx.state !== "running") audioCtx.resume();
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
     o.type = "sine"; o.frequency.value = 880;
     g.gain.setValueAtTime(0.001, audioCtx.currentTime);
@@ -820,8 +823,8 @@
     // 看門狗：每 3 秒檢查音訊引擎與麥克風是否被系統收走，必要時自動恢復
     if (now - lastWatchdog > 3000) {
       lastWatchdog = now;
-      // 相容模式的警報播放期間，引擎是刻意休眠的，不要喚醒
-      if (audioCtx.state !== "running" && !(alerting && compatCk.checked)) audioCtx.resume().catch(() => {});
+      // 警報播放期間麥克風引擎是刻意休眠的，不要喚醒
+      if (audioCtx.state !== "running" && !alerting) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
       if (keeperWant && keeper && keeper.paused) keeper.play().catch(() => {}); // 保連音軌重試
