@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v13</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v14</span></div>
 
   <div class="card">
     <div class="status">
@@ -128,7 +128,7 @@
         <span class="hint" id="trimStatus"></span>
       </div>
     </div>
-    <audio id="player" controls preload="auto" style="display:none"></audio>
+    <audio id="player" controls preload="auto" x-webkit-airplay="allow" style="display:none"></audio>
   </div>
 
   <div class="card">
@@ -190,6 +190,12 @@
         <option value="0.25">結束時為 25%</option>
         <option value="0">淡出到無聲</option>
       </select>
+    </div>
+    <div class="ctl" style="margin-top:14px">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="compatCk" style="accent-color:var(--accent)">
+        <span>音響相容模式：AirPlay 聽不到聲音時開啟（淡出功能會停用；改用藍牙連音響則不需開啟）</span>
+      </label>
     </div>
     <div class="hint" style="margin-top:14px">
       偵測原理：<b style="color:var(--text)">音量需高出背景噪音一定幅度</b>（自動適應環境與手機），並以自相關法量測<b style="color:var(--text)">基頻（F0）</b>——嬰兒哭聲基頻約 250–1000 Hz、大人講話僅 85–255 Hz，偵測到大人聲會主動排除；沙啞尖叫另以頻譜條件判斷。「哇—換氣—哇」的間隙會保留累積進度，累積夠久才觸發。上方「條件」會即時顯示三項各自是否通過（✓/✗）——測試時對著它看，哪項一直是 ✗ 就往那個方向調。這是啟發式判斷，並非醫療級偵測。
@@ -416,7 +422,15 @@
     }
     return new Blob([data.buffer], { type: "audio/wav" });
   }
-  testBtn.addEventListener("click", () => { player.currentTime = 0; player.play(); });
+  testBtn.addEventListener("click", () => {
+    if (!player.paused && !alerting) { player.pause(); player.currentTime = 0; }
+    else { player.currentTime = 0; player.play(); }
+  });
+  function refreshTestBtn() {
+    testBtn.textContent = (!player.paused && !alerting) ? "⏹ 停止試聽" : "▶️ 試聽音檔";
+  }
+  player.addEventListener("play", refreshTestBtn);
+  player.addEventListener("pause", refreshTestBtn);
 
   // --- 滑桿顯示 ---
   function refreshLabels() {
@@ -491,8 +505,14 @@
       setStatus("alert", "無法開啟麥克風", e.message || "請確認已授權，且在 https/localhost 下開啟");
       return;
     }
-    // 與播放共用同一個 AudioContext：iOS 的音訊工作階段較不會在播放前後互相打架
-    audioCtx = playCtx;
+    // 與播放共用同一個 AudioContext：iOS 的音訊工作階段較不會在播放前後互相打架。
+    // 相容模式下播放不走 Web Audio，麥克風用自己的（可重用的）AudioContext。
+    if (compatCk.checked) {
+      if (!micCtx) micCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx = micCtx;
+    } else {
+      audioCtx = playCtx;
+    }
     if (audioCtx.state === "suspended") await audioCtx.resume(); // iOS 有時以暫停狀態啟動
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -573,6 +593,16 @@
   if (fadeEnd.selectedIndex < 0) fadeEnd.value = "1";
   fadeEnd.addEventListener("change", () => localStorage.setItem("fadeEnd", fadeEnd.value));
 
+  // 音響相容模式：不經 Web Audio 增益節點，讓 AirPlay 能接收播放器輸出。
+  // 音訊路由在建立後無法切換，變更時重新載入頁面套用。
+  const compatCk = $("compatCk");
+  compatCk.checked = localStorage.getItem("compat") === "1";
+  fadeEnd.disabled = compatCk.checked;
+  compatCk.addEventListener("change", () => {
+    localStorage.setItem("compat", compatCk.checked ? "1" : "0");
+    location.reload();
+  });
+
   const trigMode = $("trigMode");
   trigMode.value = localStorage.getItem("trigMode") || "cry";
   if (trigMode.selectedIndex < 0) trigMode.value = "cry";
@@ -580,8 +610,9 @@
 
   // iPhone 不允許網頁直接調整 <audio> 的音量，改經 Web Audio 增益節點控制。
   // MediaElementSource 每個元素只能建立一次，故全域保留。
-  let playCtx = null, playGain = null;
+  let playCtx = null, playGain = null, micCtx = null;
   function ensurePlayGraph() {
+    if (compatCk.checked) return; // 相容模式：播放器直接輸出，AirPlay 才收得到
     if (!playCtx) {
       playCtx = new (window.AudioContext || window.webkitAudioContext)();
       const src = playCtx.createMediaElementSource(player);
@@ -626,12 +657,13 @@
         player.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
         const endVol = +fadeEnd.value;
-        if (endVol < 1) {
+        const fadeOn = endVol < 1 && playGain && !compatCk.checked;
+        if (fadeOn) {
           // 音量從 1 線性遞減，播放結束時剛好到達選定比例
           playGain.gain.setValueAtTime(1, playCtx.currentTime);
           playGain.gain.linearRampToValueAtTime(endVol, playCtx.currentTime + +mins * 60);
         }
-        setStatus("alert", "偵測到哭聲！循環播放 " + mins + " 分鐘…", endVol < 1 ? "音量將逐漸降至 " + (endVol * 100) + "%；按播放器的暫停可提前結束" : "按播放器的暫停可提前結束");
+        setStatus("alert", "偵測到哭聲！循環播放 " + mins + " 分鐘…", fadeOn ? "音量將逐漸降至 " + (endVol * 100) + "%；按播放器的暫停可提前結束" : "按播放器的暫停可提前結束");
       } else {
         setStatus("alert", "偵測到哭聲！播放中…", "");
       }
