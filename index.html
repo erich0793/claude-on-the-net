@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v19</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v20</span></div>
 
   <div class="card">
     <div class="status">
@@ -249,7 +249,8 @@
   let freqData, timeData;
   let running = false, alerting = false;
   let cryMs = 0, lastT = 0, lastWatchdog = 0;
-  let burstMs = 0, burstTimes = []; // 哀叫模式：短聲（≥100ms 的嬰兒聲）發生時刻
+  let burstMs = 0, burstTimes = []; // 哀叫模式：合格短聲的發生時刻
+  let burstStrongMs = 0, burstBestR = 0, burstF0 = 0; // 短聲的品質統計：清晰嬰兒基頻的時長與峰值
   let stat = null; // 每 10 秒的診斷統計：有聲音卻沒觸發時自動寫入事件紀錄
 
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn");
@@ -670,7 +671,7 @@
 
   function trigger(reason) {
     if (alerting) return;
-    alerting = true; cryMs = 0; burstMs = 0; burstTimes = [];
+    alerting = true; cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
     logEvent("🔊 觸發播放（" + (reason || "手動") + "）");
     if (player.src) {
       const mins = playDur.value;
@@ -767,20 +768,25 @@
     // 沙啞尖叫（hyperphonation/dysphonation）週期性弱，用頻譜條件備援
     const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > (fuss ? 30 : 40) && ratio > (fuss ? 0.3 : 0.35);
     // 基頻明確是嬰兒聲時，本身就是強證據——哀叫模式下只需比背景稍大聲即可
-    const weakLoud = db > Math.max(-70, noiseFloor + 2);
+    const weakLoud = db > Math.max(-62, noiseFloor + 3);
     const cryLike = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     if (!alerting && (now < cooldownUntil || now < calUntil)) {
-      cryMs = 0; burstMs = 0; burstTimes.length = 0; // 冷靜期／校準期：不累積、不觸發
+      cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes.length = 0; // 冷靜期／校準期：不累積、不觸發
     } else if (!alerting) {
-      if (cryLike) { cryMs += dt; burstMs += dt; }
-      else {
-        if (burstMs >= 100) { // 一段短促嬰兒聲結束，記一筆
+      if (cryLike) {
+        cryMs += dt; burstMs += dt;
+        if (babyPitch && pe.r > 0.45) burstStrongMs += dt; // 清晰的嬰兒聲帶振動
+        if (pe.r > burstBestR) { burstBestR = pe.r; burstF0 = pe.f0; }
+      } else {
+        // 合格的「一聲哀叫」：至少 0.25 秒，其中至少 0.12 秒有清晰嬰兒基頻
+        // （0.1 秒的碰撞聲、摩擦聲過不了這關）
+        if (burstMs >= 250 && burstStrongMs >= 120) {
           burstTimes.push(now);
-          logEvent("偵測到短聲（20 秒內第 " + burstTimes.length + " 聲）");
+          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz，20 秒內第 " + burstTimes.length + " 聲）");
         }
-        burstMs = 0;
+        burstMs = 0; burstStrongMs = 0; burstBestR = 0;
         cryMs = Math.max(0, cryMs - dt * 0.6);
       }
       while (burstTimes.length && now - burstTimes[0] > 20000) burstTimes.shift();
