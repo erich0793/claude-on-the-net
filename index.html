@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v25</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v26</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -528,9 +528,18 @@
     keeperOn();
     try {
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
-      });
+      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+      // 取得權限後才能讀裝置清單：找出內建麥克風並固定使用；
+      // 若這次抓到的不是內建（例如藍牙音響的通話麥克風），立刻換成內建
+      if (!builtinMicId) {
+        await findBuiltinMic();
+        const label = (stream.getAudioTracks()[0] || {}).label || "";
+        if (builtinMicId && !/iphone|ipad|built-?in|內建/i.test(label)) {
+          stream.getTracks().forEach(t => t.stop());
+          stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+        }
+      }
+      logEvent("麥克風：" + ((stream.getAudioTracks()[0] || {}).label || "未知"));
     } catch (e) {
       setStatus("alert", "無法開啟麥克風", e.message || "請確認已授權，且在 https/localhost 下開啟");
       return;
@@ -561,6 +570,23 @@
   }
 
   // iOS 在播放前後或系統音訊事件時，可能收回麥克風或暫停音訊引擎且不自行恢復——自動重連
+  // 固定使用內建麥克風：若抓到藍牙音響的通話麥克風，藍牙會被切成通話模式（HFP），
+  // 高音質輸出（A2DP）就切不回來，之後的播放會被丟回手機喇叭
+  let builtinMicId = null;
+  async function findBuiltinMic() {
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const builtin = devs.filter(d => d.kind === "audioinput")
+        .find(d => /iphone|ipad|built-?in|內建/i.test(d.label));
+      if (builtin) builtinMicId = builtin.deviceId;
+    } catch (e) {}
+  }
+  function micConstraints() {
+    const c = { echoCancellation: false, noiseSuppression: false, autoGainControl: true };
+    if (builtinMicId) c.deviceId = { exact: builtinMicId };
+    return { audio: c };
+  }
+
   let recovering = false;
   async function recoverMic(silent) {
     if (recovering || !running || alerting || pulsing) return;
@@ -569,9 +595,7 @@
     recovering = true;
     if (!silent) setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
-      });
+      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
       if (!running) { stream.getTracks().forEach(t => t.stop()); recovering = false; return; } // 等待期間被停止
       if (audioCtx.state !== "running") await audioCtx.resume(); // 喚醒播放期間休眠的引擎
       if (source) source.disconnect();
@@ -692,12 +716,12 @@
     // 釋放麥克風 → 等路由切到音響 → 播 3 秒保連訊號 → 收回麥克風
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
-    setTimeout(() => { if (pulsing) keeper.play().catch(() => {}); }, 300);
+    setTimeout(() => { if (pulsing) keeper.play().catch(() => {}); }, 800);
     setTimeout(() => {
       keeper.pause();
       pulsing = false;
       if (running && !alerting) recoverMic(true);
-    }, 3300);
+    }, 3800);
   }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
@@ -793,7 +817,7 @@
           setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
           beep();
         });
-      }, 350); // 給 iOS 一點時間把音訊路由切回音響
+      }, 800); // 給 iOS 足夠時間把音訊路由切回音響（藍牙模式切換約需這麼久）
     } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
