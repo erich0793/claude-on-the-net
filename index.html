@@ -86,7 +86,7 @@
 
 <div class="wrap">
   <h1>👶 嬰兒哭聲偵測播放器</h1>
-  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v15</span></div>
+  <div class="sub">開啟麥克風後持續監聽環境聲音，偵測到疑似嬰兒哭聲時自動播放你選擇的音檔。<span class="tag" style="margin-left:6px">v16</span></div>
 
   <div class="card">
     <div class="status">
@@ -424,11 +424,12 @@
     return new Blob([data.buffer], { type: "audio/wav" });
   }
   testBtn.addEventListener("click", () => {
-    if (!player.paused && !alerting) { player.pause(); player.currentTime = 0; }
+    // 播放中（不論試聽或警報）按下一律停止；警報的善後由 pause 事件處理
+    if (!player.paused) { player.pause(); player.currentTime = 0; }
     else { player.currentTime = 0; player.play(); }
   });
   function refreshTestBtn() {
-    testBtn.textContent = (!player.paused && !alerting) ? "⏹ 停止試聽" : "▶️ 試聽音檔";
+    testBtn.textContent = !player.paused ? "⏹ 停止播放" : "▶️ 試聽音檔";
   }
   player.addEventListener("play", refreshTestBtn);
   player.addEventListener("pause", refreshTestBtn);
@@ -572,6 +573,7 @@
   });
 
   function stop() {
+    if (alerting) stopAlert(); // 停止監聽時也停掉正在播放的警報音
     running = false;
     if (rafId) cancelAnimationFrame(rafId);
     if (stream) stream.getTracks().forEach(t => t.stop());
@@ -632,6 +634,7 @@
   player.addEventListener("play", () => { if (!alerting) { ensurePlayGraph(); resetGain(); } });
 
   let alertTimer = null;
+  let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
 
   function stopAlert() {
     if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
@@ -643,8 +646,15 @@
     if (running && was) { setStatus("listening", "監聽中…", "已回到偵測狀態"); logEvent("警報結束，回到監聽"); }
   }
   player.addEventListener("ended", () => { if (alerting) stopAlert(); });
-  // 手動按播放器的暫停也視為解除警報
-  player.addEventListener("pause", () => { if (alerting && !player.ended) stopAlert(); });
+  // 手動按播放器的暫停也視為解除警報（stopAlert 自己觸發的 pause 進不來：alerting 已為 false）
+  player.addEventListener("pause", () => {
+    if (alerting && !player.ended) {
+      stopAlert();
+      cooldownUntil = performance.now() + 30000;
+      logEvent("手動停止播放，30 秒內暫不重新觸發");
+      if (running) setStatus("listening", "監聽中…", "已手動停止，30 秒內暫不重新觸發");
+    }
+  });
 
   function trigger(reason) {
     if (alerting) return;
@@ -742,7 +752,9 @@
     const cryLike = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
-    if (!alerting) {
+    if (!alerting && now < cooldownUntil) {
+      cryMs = 0; burstMs = 0; burstTimes.length = 0; // 冷靜期：不累積、不觸發
+    } else if (!alerting) {
       if (cryLike) { cryMs += dt; burstMs += dt; }
       else {
         if (burstMs >= 100) { // 一段短促嬰兒聲結束，記一筆
