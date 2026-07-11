@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v30</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v31</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -362,7 +362,23 @@
   $("anyFileBtn").addEventListener("click", () => anyFileInput.click());
   anyFileInput.addEventListener("change", () => onPick(anyFileInput));
   forgetBtn.addEventListener("click", forgetAudio);
-  loadSavedAudio();
+  const audioReady = loadSavedAudio(); // 自動恢復監聽前需等音檔載入完成
+
+  // —— 自動路由重置：iOS 在「播放→錄音→再播放」循環後，媒體輸出會被卡在手機喇叭，
+  // 引導與等待都無法歸位；唯一可靠的方式是重新載入頁面（讓每次觸發都等同「第一次」）。
+  // 需將 Safari 此網站的麥克風權限設為「允許」，重載後才能無人工介入自動恢復監聽。
+  function scheduleRouteReset() {
+    sessionStorage.setItem("autoresume", "1");
+    logEvent("將自動重載頁面以重置音訊路由");
+    setTimeout(() => location.reload(), 1200);
+  }
+  if (sessionStorage.getItem("autoresume") === "1") {
+    sessionStorage.removeItem("autoresume");
+    audioReady.then(() => {
+      logEvent("頁面已重載，自動恢復監聽");
+      start();
+    });
+  }
 
   // --- 剪輯：只解碼需要的片段（用位元組比例切出區段），大檔也不會撐爆記憶體 ---
   const trimBox = $("trimBox"), trimBtn = $("trimBtn"), trimStatus = $("trimStatus");
@@ -783,7 +799,7 @@
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
   let calUntil = 0;      // 開始監聽後的校準期：快速學習背景噪音，期間不觸發
 
-  function stopAlert() {
+  function stopAlert(manual) {
     if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
     const was = alerting;
     alerting = false; cryMs = 0;
@@ -793,14 +809,15 @@
     if (running && was) {
       setStatus("listening", "監聽中…", "已回到偵測狀態");
       logEvent("警報結束，回到監聽");
-      recoverMic(true); // 重新取回播放期間暫停的麥克風
+      if (manual) recoverMic(true); // 手動停止：直接取回麥克風繼續
+      else scheduleRouteReset();    // 自然結束：重載頁面重置路由，並自動恢復監聽
     }
   }
   player.addEventListener("ended", () => { if (alerting) stopAlert(); });
   // 手動按播放器的暫停也視為解除警報（stopAlert 自己觸發的 pause 進不來：alerting 已為 false）
   player.addEventListener("pause", () => {
     if (alerting && !player.ended) {
-      stopAlert();
+      stopAlert(true);
       cooldownUntil = performance.now() + 30000;
       logEvent("手動停止播放，30 秒內暫不重新觸發");
       if (running) setStatus("listening", "監聽中…", "已手動停止，30 秒內暫不重新觸發");
