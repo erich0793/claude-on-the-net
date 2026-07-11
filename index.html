@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v32</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v33</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -617,9 +617,46 @@
     return { audio: c };
   }
 
+  // 深度音訊重置：不重載頁面（重載會丟失使用者手勢的播放授權，之後的播放
+  // 會被 iOS 丟進通話級的劣化管線），改為徹底關閉本頁所有音訊資源數秒，
+  // 讓 iOS 重新仲裁輸出路由，再重建麥克風恢復監聽。
+  let resetting = false;
+  async function deepAudioReset() {
+    if (resetting) return;
+    resetting = true;
+    try {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (keeper) keeper.pause();
+      if (audioCtx) { try { await audioCtx.close(); } catch (e) {} }
+      micCtx = null; audioCtx = null; source = null;
+      logEvent("深度音訊重置：釋放全部音訊資源 3 秒");
+      await new Promise(r => setTimeout(r, 3000));
+      if (!running) { resetting = false; return; }
+      micCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx = micCtx;
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.6;
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+      timeData = new Float32Array(analyser.fftSize);
+      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+      source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const track = stream.getAudioTracks()[0];
+      if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
+      calUntil = performance.now() + 2000;
+      logEvent("音訊已重建，恢復監聽");
+      if (running && !alerting) setStatus("listening", "監聽中…", "已回到偵測狀態");
+    } catch (e) {
+      logEvent("⚠️ 音訊重建失敗：" + (e.message || e));
+      setStatus("alert", "麥克風恢復失敗", "請按「停止」後重新開始監聽");
+    }
+    resetting = false;
+  }
+
   let recovering = false;
   async function recoverMic(silent) {
-    if (recovering || !running || alerting || pulsing) return;
+    if (recovering || !running || alerting || pulsing || resetting) return;
     const t0 = stream && stream.getAudioTracks()[0];
     if (t0 && t0.readyState === "live") return; // 麥克風還活著就不用重連
     recovering = true;
@@ -744,6 +781,7 @@
   function keeperOn() {
     if (!keepCk.checked) return;
     ensureKeeper();
+    pulseFails = 0;
     if (!keepTimer) {
       keepTimer = setInterval(keepPulse, 240000);
       logEvent("保持連線：每 4 分鐘向音響發送 5 秒保連訊號");
@@ -755,8 +793,9 @@
     if (keeper) keeper.pause();
   }
   let pulseN = 0;
+  let pulseFails = 0;
   function keepPulse() {
-    if (!running || alerting || recovering || pulsing) return;
+    if (!running || alerting || recovering || pulsing || resetting) return;
     pulsing = true;
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
     if (stream) stream.getTracks().forEach(t => t.stop());
@@ -765,9 +804,16 @@
       if (!pulsing) return;
       const p = keeper.play();
       if (p) p.then(() => {
-        pulseN++;
+        pulseN++; pulseFails = 0;
         if (pulseN <= 3 || pulseN % 5 === 0) logEvent("保連脈衝 #" + pulseN + " 已送出");
-      }).catch(() => logEvent("⚠️ 保連脈衝被瀏覽器阻擋"));
+      }).catch(() => {
+        pulseFails++;
+        logEvent("⚠️ 保連脈衝被瀏覽器阻擋");
+        if (pulseFails >= 2 && keepTimer) { // 連續被擋代表播放授權已失效，別再白白中斷麥克風
+          clearInterval(keepTimer); keepTimer = null;
+          logEvent("保連脈衝連續被阻擋，已自動暫停此功能");
+        }
+      });
     }, 800);
     setTimeout(() => {
       keeper.pause();
@@ -823,7 +869,7 @@
       setStatus("listening", "監聽中…", "已回到偵測狀態");
       logEvent("警報結束，回到監聽");
       if (manual) recoverMic(true); // 手動停止：直接取回麥克風繼續
-      else scheduleRouteReset();    // 自然結束：重載頁面重置路由，並自動恢復監聽
+      else deepAudioReset();        // 自然結束：深度音訊重置歸位路由，再恢復監聽
     }
   }
   player.addEventListener("ended", () => { if (alerting) stopAlert(); });
@@ -897,6 +943,7 @@
   function loop() {
     if (!running) return;
     rafId = requestAnimationFrame(loop);
+    if (resetting || !audioCtx || !analyser) return; // 深度重置期間音訊資源不存在
 
     analyser.getByteFrequencyData(freqData);
     analyser.getFloatTimeDomainData(timeData);
