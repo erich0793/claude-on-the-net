@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v28</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v29</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -488,7 +488,7 @@
       for (let i = 0; i < N - lag; i++) sum += timeData[off + i] * timeData[off + i + lag];
       const r = sum / (energy * (N - lag) / N); // 修正視窗長度造成的偏差
       if (!started) { if (r < 0.3) started = true; continue; }
-      if (lag >= minLag && r > bestR) { bestR = r; bestLag = lag; }
+      if (lag > minLag + 1 && r > bestR) { bestR = r; bestLag = lag; } // 排除搜尋邊界的假峰值
     }
     return { f0: bestLag ? sr / bestLag : 0, r: bestR };
   }
@@ -608,6 +608,7 @@
       source.connect(analyser);
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
+      calUntil = performance.now() + 2000; // 重連後快速重校背景噪音基準，期間不觸發
       logEvent("麥克風重連：" + ((track && track.label) || "未知")); // 若顯示藍牙裝置名即為路由問題的元兇
       if (!silent) {
         if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
@@ -886,7 +887,11 @@
       if (!t || t.readyState === "ended") recoverMic();
     }
 
-    updateNoiseFloor(db, dt, now < calUntil);
+    // 麥克風不在線（警報播放／保連脈衝）時凍結背景噪音基準——
+    // 否則靜音會把基準拖到 -100dB 以下，重連後整整一分鐘任何聲音都「音量爆表」
+    const tk = stream && stream.getAudioTracks()[0];
+    const micLive = !!(tk && tk.readyState === "live") && audioCtx.state === "running";
+    if (micLive) updateNoiseFloor(db, dt, now < calUntil);
     const fuss = trigMode.value === "fuss";
     // 哀叫通常比大哭小聲，哀叫模式音量門檻再放低 5dB
     const loud = db > Math.max(-68, noiseFloor + loudMarginDb() - (fuss ? 5 : 0));
@@ -903,8 +908,8 @@
     const cryLike = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
-    if (!alerting && (now < cooldownUntil || now < calUntil)) {
-      cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes.length = 0; // 冷靜期／校準期：不累積、不觸發
+    if (!alerting && (!micLive || now < cooldownUntil || now < calUntil)) {
+      cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes.length = 0; // 麥克風離線／冷靜期／校準期：不累積、不觸發
     } else if (!alerting) {
       if (cryLike) {
         cryMs += dt; burstMs += dt;
@@ -937,7 +942,10 @@
     floorVal.textContent = noiseFloor.toFixed(0) + " dB";
     f0Val.textContent = pe.r > 0.35 && pe.f0 > 0 ? pe.f0.toFixed(0) + " Hz" : "無週期";
     burstVal.textContent = fuss ? burstTimes.length + " / 2" : "（哀叫模式未開）";
-    // 診斷統計：每 10 秒彙整一次；期間有明顯聲音卻沒觸發時，寫入事件紀錄供調校
+    // 診斷統計：每 10 秒彙整一次；期間有明顯聲音卻沒觸發時，寫入事件紀錄供調校。
+    // 麥克風離線的幀不列入，避免產生誤導性的統計
+    if (!micLive) stat = null;
+    else {
     if (!stat) stat = { t0: now, n: 0, loud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestR: 0, bestF0: 0 };
     stat.n++;
     if (loud) stat.loud++;
@@ -952,6 +960,7 @@
         logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜最強週期 F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2));
       }
       stat = null;
+    }
     }
 
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
