@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v29</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v30</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -528,6 +528,7 @@
   async function start() {
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
     unlockAudio();
+    unlockKeeper(); // 保連音軌兼任「路由引導」，無論有無勾選保持連線都需解鎖
     if (!compatCk.checked && +fadeEnd.value < 1) ensurePlayGraph(); // 僅淡出需要 Web Audio
     keeperOn();
     try {
@@ -696,17 +697,24 @@
     for (let i = 0; i < n; i++) b.setInt16(44 + i * 2, Math.round(amp * Math.sin(2 * Math.PI * f * i / sr)), true);
     return URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
   }
-  function keeperOn() {
-    if (!keepCk.checked) return;
+  function ensureKeeper() {
     if (!keeper) {
       keeper = new Audio(keepWavUrl());
       keeper.loop = true;
       keeper.setAttribute("x-webkit-airplay", "allow");
     }
-    // 在使用者手勢內先解鎖保連音軌，之後的定時播放才不會被 iOS 擋下
+    return keeper;
+  }
+  // 在使用者手勢內先解鎖保連音軌，之後的定時／程式播放才不會被 iOS 擋下
+  function unlockKeeper() {
+    ensureKeeper();
     keeper.muted = true;
     const p = keeper.play();
     if (p) p.then(() => { keeper.pause(); keeper.muted = false; }).catch(() => { keeper.muted = false; });
+  }
+  function keeperOn() {
+    if (!keepCk.checked) return;
+    ensureKeeper();
     if (!keepTimer) {
       keepTimer = setInterval(keepPulse, 240000);
       logEvent("保持連線：每 4 分鐘向音響發送 5 秒保連訊號");
@@ -740,7 +748,7 @@
   }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
-    if (keepCk.checked && running) keeperOn(); else keeperOff();
+    if (keepCk.checked && running) { unlockKeeper(); keeperOn(); } else keeperOff();
     logEvent(keepCk.checked ? "已開啟保持音響連線" : "已關閉保持音響連線");
   });
 
@@ -821,18 +829,21 @@
       } else {
         setStatus("alert", "偵測到哭聲！播放中…", "");
       }
-      // 先關麥克風、稍候再播放：iOS 在錄音期間常把輸出路由留在手機喇叭，
-      // 順序顛倒會讓警報從手機而非藍牙／AirPlay 音響出聲。
-      // （錄音＋播放同時進行也會使輸出被切成通話模式而劣化——同一箭雙鵰）
+      // 先關麥克風、再主動引導路由：iOS 在錄音期間會把輸出留在手機喇叭，
+      // 且剛結束播放又立刻再觸發時，路由仲裁常來不及歸位——被動等待不可靠。
+      // 改用聽不見的保連音軌先「推」路由回音響，站穩後警報音樂再接手。
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
+      ensureKeeper();
+      setTimeout(() => { keeper.play().catch(() => {}); }, 250);
       setTimeout(() => {
         player.currentTime = 0;
         player.play().catch(() => {
           setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
           beep();
         });
-      }, 800); // 給 iOS 足夠時間把音訊路由切回音響（藍牙模式切換約需這麼久）
+        setTimeout(() => { if (!pulsing) keeper.pause(); }, 600); // 音樂開始後放開引導音軌
+      }, 1500);
     } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
