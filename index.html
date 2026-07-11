@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v26</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v27</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -220,7 +220,7 @@
     <div class="ctl" style="margin-top:12px">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
         <input type="checkbox" id="keepCk" style="accent-color:var(--accent)">
-        <span>🔗 保持音響連線：每 4 分鐘向音響發送 3 秒聽不見的保連訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機</span>
+        <span>🔗 保持音響連線：每 4 分鐘向音響發送 5 秒聽不見的保連訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機</span>
       </label>
     </div>
     <details style="margin-top:16px">
@@ -679,7 +679,7 @@
   function keepWavUrl() {
     // 極微弱 17.5kHz 正弦波：成人聽不到，且完全在偵測分析頻帶之外（不會自我觸發）；
     // 對音響是「持續有內容」的訊號——純無聲會觸發許多音響的自動關機
-    const sr = 44100, n = sr * 10, amp = 330, f = 17500;
+    const sr = 44100, n = sr * 10, amp = 1300, f = 17500;
     const b = new DataView(new ArrayBuffer(44 + n * 2));
     const w8 = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
     w8(0, "RIFF"); b.setUint32(4, 36 + n * 2, true); w8(8, "WAVE"); w8(12, "fmt ");
@@ -702,7 +702,7 @@
     if (p) p.then(() => { keeper.pause(); keeper.muted = false; }).catch(() => { keeper.muted = false; });
     if (!keepTimer) {
       keepTimer = setInterval(keepPulse, 240000);
-      logEvent("保持連線：每 4 分鐘向音響發送 3 秒保連訊號");
+      logEvent("保持連線：每 4 分鐘向音響發送 5 秒保連訊號");
     }
   }
   function keeperOff() {
@@ -710,18 +710,26 @@
     pulsing = false;
     if (keeper) keeper.pause();
   }
+  let pulseN = 0;
   function keepPulse() {
     if (!running || alerting || recovering || pulsing) return;
     pulsing = true;
-    // 釋放麥克風 → 等路由切到音響 → 播 3 秒保連訊號 → 收回麥克風
+    // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
-    setTimeout(() => { if (pulsing) keeper.play().catch(() => {}); }, 800);
+    setTimeout(() => {
+      if (!pulsing) return;
+      const p = keeper.play();
+      if (p) p.then(() => {
+        pulseN++;
+        if (pulseN <= 3 || pulseN % 5 === 0) logEvent("保連脈衝 #" + pulseN + " 已送出");
+      }).catch(() => logEvent("⚠️ 保連脈衝被瀏覽器阻擋"));
+    }, 800);
     setTimeout(() => {
       keeper.pause();
       pulsing = false;
       if (running && !alerting) recoverMic(true);
-    }, 3800);
+    }, 5800);
   }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
