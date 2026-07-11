@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v31</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v32</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -468,8 +468,17 @@
   }
   testBtn.addEventListener("click", () => {
     // 播放中（不論試聽或警報）按下一律停止；警報的善後由 pause 事件處理
-    if (!player.paused) { player.pause(); player.currentTime = 0; }
-    else { player.currentTime = 0; player.play(); }
+    if (!player.paused) {
+      player.pause(); player.currentTime = 0;
+      // 媒體管線卡死時 pause 會被無視——重載頁面是唯一解，監聽中會自動恢復
+      setTimeout(() => {
+        if (!player.paused) {
+          logEvent("⚠️ 播放器卡死，重載頁面脫困");
+          if (running) sessionStorage.setItem("autoresume", "1");
+          location.reload();
+        }
+      }, 700);
+    } else { player.currentTime = 0; player.play(); }
   });
   function refreshTestBtn() {
     testBtn.textContent = !player.paused ? "⏹ 停止播放" : "▶️ 試聽音檔";
@@ -663,6 +672,10 @@
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
     logEvent("停止監聽");
+    // 媒體管線卡死時 pause 會被無視——重載脫困（使用者要求停止，故不自動恢復監聽）
+    setTimeout(() => {
+      if (!player.paused) { logEvent("⚠️ 播放器卡死，重載頁面脫困"); location.reload(); }
+    }, 700);
     volBar.style.width = "0%"; scoreBar.style.width = "0%";
   }
 
@@ -846,21 +859,27 @@
       } else {
         setStatus("alert", "偵測到哭聲！播放中…", "");
       }
-      // 先關麥克風、再主動引導路由：iOS 在錄音期間會把輸出留在手機喇叭，
-      // 且剛結束播放又立刻再觸發時，路由仲裁常來不及歸位——被動等待不可靠。
-      // 改用聽不見的保連音軌先「推」路由回音響，站穩後警報音樂再接手。
+      // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭。
+      // 路由歸位交給播放結束後的頁面重載（每次觸發都等同「第一次」），不再需要引導音軌。
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
-      ensureKeeper();
-      setTimeout(() => { keeper.play().catch(() => {}); }, 250);
       setTimeout(() => {
         player.currentTime = 0;
-        player.play().catch(() => {
+        let playStarted = false;
+        const pr = player.play();
+        if (pr) pr.then(() => { playStarted = true; }).catch(() => {
           setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
           beep();
         });
-        setTimeout(() => { if (!pulsing) keeper.pause(); }, 600); // 音樂開始後放開引導音軌
-      }, 1500);
+        // 播放健康檢查：媒體管線偶爾在重載後卡死（進度不動、聲音碎片循環、無法暫停），
+        // 唯一可靠的解法一樣是重載頁面
+        setTimeout(() => {
+          if (alerting && playStarted && (player.paused || player.currentTime < 0.3)) {
+            logEvent("⚠️ 播放管線卡死，重載頁面恢復");
+            scheduleRouteReset();
+          }
+        }, 4000);
+      }, 800);
     } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
