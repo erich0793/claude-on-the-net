@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v27</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v28</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -479,12 +479,16 @@
     for (let i = 0; i < N; i++) { const v = timeData[off + i]; energy += v * v; }
     if (energy < 1e-6) return { f0: 0, r: 0 };
     const minLag = Math.floor(sr / 1000), maxLag = Math.min(N - 1, Math.floor(sr / 150));
-    let bestR = 0, bestLag = 0;
-    for (let lag = minLag; lag <= maxLag; lag++) {
+    // 平滑訊號在極小 lag 的自相關必然趨近 1，會偽裝成 ~1000Hz 的假基頻。
+    // 先從更小的 lag 掃描、等相關首次跌破 0.3（去相關點）之後的峰值才算真實基頻。
+    const minScan = Math.max(2, Math.floor(sr / 2500));
+    let bestR = 0, bestLag = 0, started = false;
+    for (let lag = minScan; lag <= maxLag; lag++) {
       let sum = 0;
       for (let i = 0; i < N - lag; i++) sum += timeData[off + i] * timeData[off + i + lag];
       const r = sum / (energy * (N - lag) / N); // 修正視窗長度造成的偏差
-      if (r > bestR) { bestR = r; bestLag = lag; }
+      if (!started) { if (r < 0.3) started = true; continue; }
+      if (lag >= minLag && r > bestR) { bestR = r; bestLag = lag; }
     }
     return { f0: bestLag ? sr / bestLag : 0, r: bestR };
   }
@@ -595,6 +599,7 @@
     recovering = true;
     if (!silent) setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
     try {
+      if (!builtinMicId) await findBuiltinMic(); // 首次未鎖定成功時再試一次
       stream = await navigator.mediaDevices.getUserMedia(micConstraints());
       if (!running) { stream.getTracks().forEach(t => t.stop()); recovering = false; return; } // 等待期間被停止
       if (audioCtx.state !== "running") await audioCtx.resume(); // 喚醒播放期間休眠的引擎
@@ -603,6 +608,7 @@
       source.connect(analyser);
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
+      logEvent("麥克風重連：" + ((track && track.label) || "未知")); // 若顯示藍牙裝置名即為路由問題的元兇
       if (!silent) {
         if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
         logEvent("麥克風中斷後已自動重連");
