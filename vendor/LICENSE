@@ -1,0 +1,4 @@
+The files in this directory are from @tensorflow/tfjs-tflite (npm),
+Copyright Google LLC, licensed under the Apache License 2.0.
+assets/yamnet.tflite is the YAMNet model from the TensorFlow models
+repository (tensorflow/models, research/audioset/yamnet), Apache 2.0.
