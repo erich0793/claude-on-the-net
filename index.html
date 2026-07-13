@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v36</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v37</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -184,7 +184,7 @@
       <label><span>觸發條件</span></label>
       <select id="trigMode" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="cry">1. 哭泣才觸發（持續哭聲累積夠久）</option>
-        <option value="fuss">2. 哭泣＋哀叫都觸發（20 秒內 2 聲短促哎叫也算）</option>
+        <option value="fuss">2. 哭泣＋哀叫都觸發（25 秒內 2 聲短促哎叫也算）</option>
       </select>
     </div>
     <div class="ctl" style="margin-top:14px">
@@ -1141,7 +1141,10 @@
     const mlScore = fuss ? mlHoldF : mlHoldB; // 哀叫模式採計擴充類別（Babbling／Child speech）
     const mlCry = mlFresh && mlScore >= mlThr && mlScore > mlAdult * 0.8;
     const mlVeto = mlFresh && mlAdult >= 0.5 && mlHoldB < mlThr && mlHoldF < mlThr; // 明確是大人語音
-    const dspCry = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
+    // 哀叫模式兩條路徑都用寬鬆音量門檻：夜間遠距的小聲哀叫常過不了 loud；
+    // spectralCry 自身已有 domFreq/peakMag/ratio 三重品質檢查把關
+    const dspGate = fuss ? weakLoud : loud;
+    const dspCry = !adultVoice && dspGate && (babyPitch || spectralCry);
     const cryLike = mlFresh ? (!mlVeto && (dspCry || (mlCry && (fuss ? weakLoud : loud)))) : dspCry;
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
@@ -1153,18 +1156,20 @@
         if ((babyPitch && pe.r > 0.45) || mlCry) burstStrongMs += dt; // 清晰嬰兒聲帶振動或 AI 確認
         if (pe.r > burstBestR) { burstBestR = pe.r; burstF0 = pe.f0; }
       } else {
-        // 合格的「一聲哀叫」：至少 0.25 秒，其中至少 0.12 秒有清晰嬰兒基頻
-        // （0.1 秒的碰撞聲、摩擦聲過不了這關）
-        if (burstMs >= 250 && burstStrongMs >= 120) {
+        // 合格的「一聲哀叫」：哀叫模式 0.18 秒（其中 0.08 秒高品質，或 AI 背書），
+        // 僅哭泣模式維持 0.25／0.12 秒——0.1 秒級的碰撞、摩擦聲兩者都過不了
+        const bMinMs = fuss ? 180 : 250;
+        const bStrongNeed = fuss ? 80 : 120;
+        if (burstMs >= bMinMs && (burstStrongMs >= bStrongNeed || (mlFresh && mlScore >= mlThr * 0.6))) {
           burstTimes.push(now);
-          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，20 秒內第 " + burstTimes.length + " 聲）");
+          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，25 秒內第 " + burstTimes.length + " 聲）");
         }
         burstMs = 0; burstStrongMs = 0; burstBestR = 0;
         cryMs = Math.max(0, cryMs - dt * 0.6);
       }
-      while (burstTimes.length && now - burstTimes[0] > 20000) burstTimes.shift();
+      while (burstTimes.length && now - burstTimes[0] > 25000) burstTimes.shift();
       if (cryMs >= +dur.value) trigger("持續哭聲");                 // 持續哭聲
-      else if (fuss && burstTimes.length >= 2) trigger("短聲達標"); // 20 秒內 2 聲哀叫
+      else if (fuss && burstTimes.length >= 2) trigger("短聲達標"); // 25 秒內 2 聲哀叫
     }
 
     // 5) UI 更新
