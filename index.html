@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v34</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v35</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -286,8 +286,9 @@
   mlCk.addEventListener("change", () => { localStorage.setItem("mlOn", mlCk.checked ? "1" : "0"); });
 
   let mlRunner = null, mlReady = false, mlInput = null, mlOutput = null;
-  let mlBaby = 0, mlAdult = 0, mlTopName = "", mlAt = 0, mlBusy = false;
-  let babyIdx = [], adultIdx = [], clsNames = [];
+  let mlBaby = 0, mlFussScore = 0, mlAdult = 0, mlTopName = "", mlAt = 0, mlBusy = false;
+  let mlPeakB = 0, mlPeakBAt = 0, mlPeakF = 0, mlPeakFAt = 0; // 峰值保持：抗短叫被 1 秒分析窗稀釋
+  let babyIdx = [], fussExtraIdx = [], adultIdx = [], clsNames = [];
   async function initML() {
     try {
       if (!window.tfweb) throw new Error("tflite 客戶端未載入");
@@ -297,6 +298,8 @@
       clsNames.forEach((n, i) => {
         // 嬰兒苦惱聲：哭、啜泣、哀鳴、慟哭、尖叫（「Whimper (dog)」以 $ 錨點排除）
         if (/baby cry|infant cry|^crying|whimper$|wail|moan|^screaming$/i.test(n)) babyIdx.push(i);
+        // 哀叫模式的擴充類別：YAMNet 常把「還沒哭出來的盧聲」分到這兩類
+        if (/^babbling$|^child speech/i.test(n)) fussExtraIdx.push(i);
         // 大人語音情境：用於否決誤判
         if (/^speech$|conversation|narration|speech synthesizer|hubbub/i.test(n)) adultIdx.push(i);
       });
@@ -357,12 +360,16 @@
       }
       mlRunner.infer();
       const out = mlOutput.data(); // 521 類分數
-      let bb = 0, ad = 0, ti = 0;
+      let bb = 0, fx = 0, ad = 0, ti = 0;
       for (const i of babyIdx) if (out[i] > bb) bb = out[i];
+      for (const i of fussExtraIdx) if (out[i] > fx) fx = out[i];
       for (const i of adultIdx) if (out[i] > ad) ad = out[i];
       for (let i = 1; i < out.length; i++) if (out[i] > out[ti]) ti = i;
-      mlBaby = bb; mlAdult = ad; mlTopName = clsNames[ti] || "";
+      mlBaby = bb; mlFussScore = Math.max(bb, fx); mlAdult = ad; mlTopName = clsNames[ti] || "";
       mlAt = performance.now();
+      // 峰值保持 2.5 秒：短促的叫聲即使只被一次推論抓到，也能撐過整個判定窗
+      if (bb >= mlPeakB || mlAt - mlPeakBAt > 2500) { mlPeakB = bb; mlPeakBAt = mlAt; }
+      if (mlFussScore >= mlPeakF || mlAt - mlPeakFAt > 2500) { mlPeakF = mlFussScore; mlPeakFAt = mlAt; }
     } catch (e) { /* 單次失敗略過 */ }
     mlBusy = false;
   }
@@ -1103,20 +1110,17 @@
     const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > (fuss ? 30 : 40) && ratio > (fuss ? 0.3 : 0.35);
     // 基頻明確是嬰兒聲時，本身就是強證據——哀叫模式下只需比背景稍大聲即可
     const weakLoud = db > Math.max(-62, noiseFloor + 3);
-    // AI 融合：模型判定新鮮（2.5 秒內）時作為主要證據與大人語音否決者；
-    // 過期或未載入則退回純傳統（DSP）判定
+    // AI 融合原則：AI 只能「加分」（新增獨立觸發路徑）與「否決明確的大人語音」，
+    // 絕不收緊傳統偵測——YAMNet 對還沒大哭的哀叫分數偏低，讓它守門會漏接（v34 教訓）
     const mlFresh = mlReady && mlCk.checked && (now - mlAt < 2500);
     const mlThr = 0.45 - (+sens.value / 100) * 0.25; // 靈敏度越高，AI 門檻越低
-    const mlCry = mlFresh && mlBaby >= mlThr && mlBaby > mlAdult * 0.8;
-    const mlVeto = mlFresh && mlAdult >= 0.5 && mlBaby < mlThr; // 明確是大人語音
-    let cryLike;
-    if (mlFresh) {
-      // AI 在線：AI 判定即成立；傳統條件成立時仍需 AI 一半分數背書
-      cryLike = (fuss ? weakLoud : loud) && !mlVeto &&
-        (mlCry || (!adultVoice && (babyPitch || spectralCry) && mlBaby >= mlThr * 0.5));
-    } else {
-      cryLike = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
-    }
+    const mlHoldB = (now - mlPeakBAt < 2500) ? Math.max(mlBaby, mlPeakB) : mlBaby;
+    const mlHoldF = (now - mlPeakFAt < 2500) ? Math.max(mlFussScore, mlPeakF) : mlFussScore;
+    const mlScore = fuss ? mlHoldF : mlHoldB; // 哀叫模式採計擴充類別（Babbling／Child speech）
+    const mlCry = mlFresh && mlScore >= mlThr && mlScore > mlAdult * 0.8;
+    const mlVeto = mlFresh && mlAdult >= 0.5 && mlHoldB < mlThr && mlHoldF < mlThr; // 明確是大人語音
+    const dspCry = !adultVoice && ((babyPitch && (fuss ? weakLoud : loud)) || (spectralCry && loud));
+    const cryLike = mlFresh ? (!mlVeto && (dspCry || (mlCry && (fuss ? weakLoud : loud)))) : dspCry;
 
     // 4) 時間累積（與畫面更新率無關）。衰減放慢，讓「哇—換氣—哇」的間隙不會歸零
     if (!alerting && (!micLive || now < cooldownUntil || now < calUntil)) {
@@ -1131,7 +1135,7 @@
         // （0.1 秒的碰撞聲、摩擦聲過不了這關）
         if (burstMs >= 250 && burstStrongMs >= 120) {
           burstTimes.push(now);
-          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI嬰 " + Math.round(mlBaby * 100) + "%" : "") + "，20 秒內第 " + burstTimes.length + " 聲）");
+          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，20 秒內第 " + burstTimes.length + " 聲）");
         }
         burstMs = 0; burstStrongMs = 0; burstBestR = 0;
         cryMs = Math.max(0, cryMs - dt * 0.6);
@@ -1158,7 +1162,7 @@
     if (!micLive) stat = null;
     else {
     if (!stat) stat = { t0: now, n: 0, loud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestR: 0, bestF0: 0, mlB: 0, mlA: 0 };
-    if (mlFresh) { if (mlBaby > stat.mlB) stat.mlB = mlBaby; if (mlAdult > stat.mlA) stat.mlA = mlAdult; }
+    if (mlFresh) { if (mlScore > stat.mlB) stat.mlB = mlScore; if (mlAdult > stat.mlA) stat.mlA = mlAdult; }
     stat.n++;
     if (loud) stat.loud++;
     if (babyPitch) stat.baby++;
@@ -1178,7 +1182,7 @@
     frameVal.textContent = alerting ? "播放中" : (cryLike ? "疑似哭聲" : "環境音");
     frameVal.style.color = cryLike ? "var(--danger)" : "var(--text)";
     condVal.textContent = (loud ? "音量✓" : "音量✗") + " " + (babyPitch ? "嬰兒基頻✓" : "嬰兒基頻✗") + " " + (spectralCry ? "頻譜✓" : "頻譜✗") + (mlFresh ? (mlCry ? " AI✓" : " AI✗") : "") + (adultVoice || mlVeto ? " 🚫大人聲" : "");
-    if (mlReady) mlVal.textContent = !mlCk.checked ? "已關閉" : (mlFresh ? "嬰兒 " + Math.round(mlBaby * 100) + "%｜大人 " + Math.round(mlAdult * 100) + "%" : "待命");
+    if (mlReady) mlVal.textContent = !mlCk.checked ? "已關閉" : (mlFresh ? "嬰兒 " + Math.round(mlScore * 100) + "%｜大人 " + Math.round(mlAdult * 100) + "%" : "待命");
 
     drawViz();
   }
