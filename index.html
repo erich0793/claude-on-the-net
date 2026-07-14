@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v37</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v38</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -317,47 +317,15 @@
   }
   initML();
 
-  // 連續 PCM 收集：AnalyserNode 只給快照，YAMNet 需要完整的 0.975 秒波形
-  let mlProc = null, mlSink = null, mlBuf = null, mlBufLen = 0;
-  let lastSPAt = 0, mlWiredAt = 0, mlCompatWired = false;
-  function wireML(compat) {
-    if (!audioCtx || !source) return;
-    try {
-      const rate = audioCtx.sampleRate;
-      mlBuf = new Float32Array(Math.ceil(rate * 0.975) + 8192);
-      mlBufLen = 0;
-      if (mlProc) { try { mlProc.disconnect(); mlSink.disconnect(); } catch (e) {} } // 清掉舊管線
-      mlProc = audioCtx.createScriptProcessor(4096, 1, 1);
-      source.connect(mlProc);
-      if (compat) {
-        // 相容接法：部分 WebKit 需接到硬體輸出端 SP 才會運轉（0 增益避免回授）。
-        // 代價：麥克風引擎變成「邊錄邊播」工作階段，可能影響之後的播放路由。
-        mlSink = audioCtx.createGain();
-        mlSink.gain.value = 0;
-        mlProc.connect(mlSink);
-        mlSink.connect(audioCtx.destination);
-        mlCompatWired = true;
-      } else {
-        // 預設接法：MediaStreamDestination 一樣能驅動渲染，但不佔用硬體輸出——
-        // 麥克風引擎維持「純輸入」形態，不干擾 iOS 對播放的路由仲裁（v34 回歸的教訓）
-        mlSink = audioCtx.createMediaStreamDestination();
-        mlProc.connect(mlSink);
-        mlCompatWired = false;
-      }
-      mlWiredAt = performance.now();
-      lastSPAt = 0;
-      mlProc.onaudioprocess = (e) => {
-        lastSPAt = performance.now();
-        const d = e.inputBuffer.getChannelData(0);
-        if (mlBufLen + d.length > mlBuf.length) {
-          const keep = mlBuf.length - d.length;
-          mlBuf.copyWithin(0, mlBufLen - keep, mlBufLen);
-          mlBufLen = keep;
-        }
-        mlBuf.set(d, mlBufLen);
-        mlBufLen += d.length;
-      };
-    } catch (e) { /* 不支援時 AI 自動缺席，傳統偵測照跑 */ }
+  // 連續 PCM 收集：不掛任何額外節點——ScriptProcessor 不論接什麼終點（喇叭輸出
+  // 或 MediaStreamDestination），只要掛在麥克風引擎上，iOS 就把工作階段視為具
+  // 輸出形態，破壞深度重置後的播放路由歸位（v35/v37 兩晚實測教訓）。
+  // 改在偵測迴圈內，從 AnalyserNode 的波形快照逐幀拼接出連續音訊。
+  let mlBuf = null, mlBufLen = 0;
+  function mlBufInit() {
+    if (!audioCtx) return;
+    mlBuf = new Float32Array(Math.ceil(audioCtx.sampleRate * 0.975) + 8192);
+    mlBufLen = 0;
   }
   function mlInfer() {
     if (!mlReady || mlBusy || !mlBuf) return;
@@ -702,7 +670,7 @@
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.6;
     source.connect(analyser); // 不接到 destination，避免回授
-    wireML();
+    mlBufInit();
     freqData = new Uint8Array(analyser.frequencyBinCount);
     timeData = new Float32Array(analyser.fftSize);
     const track = stream.getAudioTracks()[0];
@@ -760,7 +728,7 @@
       stream = await navigator.mediaDevices.getUserMedia(micConstraints());
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
-      wireML();
+      mlBufInit();
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
       calUntil = performance.now() + 2000;
@@ -788,7 +756,7 @@
       if (source) source.disconnect();
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
-      wireML();
+      mlBufInit();
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
       calUntil = performance.now() + 2000; // 重連後快速重校背景噪音基準，期間不觸發
@@ -1099,14 +1067,6 @@
       if (audioCtx.state !== "running" && !alerting && !pulsing) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
-      // AI 收音停轉偵測：預設接法在極少數 WebKit 版本可能不驅動 ScriptProcessor，
-      // 超過 6 秒沒有收到音訊回呼就一次性改用相容接法，AI 不會默默失效
-      if (t && t.readyState === "live" && audioCtx.state === "running" &&
-          mlReady && mlCk.checked && !mlCompatWired && mlWiredAt &&
-          now - mlWiredAt > 6000 && (!lastSPAt || now - lastSPAt > 6000)) {
-        logEvent("⚠️ AI 收音改用相容接法（此機型需要；可能影響播放路由）");
-        wireML(true);
-      }
     }
 
     // 麥克風不在線（警報播放／保連脈衝）時凍結背景噪音基準——
@@ -1114,6 +1074,19 @@
     const tk = stream && stream.getAudioTracks()[0];
     const micLive = !!(tk && tk.readyState === "live") && audioCtx.state === "running";
     if (micLive) updateNoiseFloor(db, dt, now < calUntil);
+    // AI 取音：把每幀新增的樣本從波形快照尾端拼進緩衝（連續 PCM 近似，不掛任何音訊節點）
+    if (micLive && mlReady && mlCk.checked && mlBuf) {
+      const add = Math.min(timeData.length, Math.round(audioCtx.sampleRate * dt / 1000));
+      if (add > 0) {
+        if (mlBufLen + add > mlBuf.length) {
+          const keep = mlBuf.length - add;
+          mlBuf.copyWithin(0, mlBufLen - keep, mlBufLen);
+          mlBufLen = keep;
+        }
+        mlBuf.set(timeData.subarray(timeData.length - add), mlBufLen);
+        mlBufLen += add;
+      }
+    }
     // AI 推論：每 1.1 秒對最近 0.975 秒的波形做一次分類
     if (micLive && !alerting && mlReady && mlCk.checked && now - lastInfer > 1100) {
       lastInfer = now;
