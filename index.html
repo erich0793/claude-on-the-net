@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v40</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v41</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -368,6 +368,7 @@
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn"), manualBtn = $("manualBtn");
   // 手動播放：不經偵測，沿用「播放」設定的時長與淡出；播放機制與警報共用
   manualBtn.addEventListener("click", () => {
+    topUpPool(); // 趁手勢補滿警報元素池
     if (player.src && !alerting) trigger("手動播放");
   });
   dlBtn.addEventListener("click", () => {
@@ -419,6 +420,7 @@
     dlBtn.style.display = "none";
     trimBox.style.display = "none";
     currentBlob = null; currentName = "";
+    clearPool();
   }
 
   function fmtSize(bytes) {
@@ -448,6 +450,8 @@
     if (!f) return;
     useAudio(f, f.name, false);
     saveAudio(f); // 記住這個音檔，下次自動載入
+    clearPool();  // 舊音檔的池元素已失效
+    topUpPool();  // change 事件屬使用者手勢，可解鎖新元素
   }
   fileInput.addEventListener("change", () => onPick(fileInput));
   const anyFileInput = $("anyFileInput");
@@ -559,12 +563,14 @@
     return new Blob([data.buffer], { type: "audio/wav" });
   }
   testBtn.addEventListener("click", () => {
+    topUpPool(); // 趁手勢補滿警報元素池
     // 播放中（不論試聽或警報）按下一律停止；警報的善後由 pause 事件處理
-    if (!player.paused) {
-      player.pause(); player.currentTime = 0;
+    const el = curEl();
+    if (!el.paused) {
+      el.pause(); el.currentTime = 0;
       // 媒體管線卡死時 pause 會被無視——重載頁面是唯一解，監聽中會自動恢復
       setTimeout(() => {
-        if (!player.paused) {
+        if (!el.paused) {
           logEvent("⚠️ 播放器卡死，重載頁面脫困");
           if (running) sessionStorage.setItem("autoresume", "1");
           location.reload();
@@ -630,6 +636,38 @@
   startBtn.addEventListener("click", start);
   stopBtn.addEventListener("click", stop);
 
+  // —— 處女播放元素池：每次警報使用一個從未播放過的全新 Audio 元素（用完即棄），
+  // 排除「元素殘留的媒體工作階段把路由釘在手機」的可能。
+  // 元素解鎖需使用者手勢，故於各按鈕的 click 手勢內補滿。
+  let elPool = [], alertEl = null;
+  function curEl() { return alertEl || player; }
+  function attachAlertHandlers(el) {
+    el.addEventListener("ended", () => { if (alerting && curEl() === el) stopAlert(); });
+    el.addEventListener("pause", () => {
+      if (alerting && curEl() === el && !el.ended) {
+        stopAlert(true);
+        cooldownUntil = performance.now() + 30000;
+        logEvent("手動停止播放，30 秒內暫不重新觸發");
+        if (running) setStatus("listening", "監聽中…", "已手動停止，30 秒內暫不重新觸發");
+      }
+    });
+  }
+  function clearPool() { elPool = []; }
+  function topUpPool() {
+    if (!player.src) return;
+    while (elPool.length < 8) {
+      const el = new Audio(player.src);
+      el.preload = "auto";
+      el.setAttribute("x-webkit-airplay", "allow");
+      attachAlertHandlers(el);
+      el.muted = true; // 手勢內靜音播放一瞬完成解鎖
+      const p = el.play();
+      if (p) p.then(() => { el.pause(); el.currentTime = 0; el.muted = false; })
+             .catch(() => { el.muted = false; });
+      elPool.push(el);
+    }
+  }
+
   // iOS 只允許使用者手勢啟動的播放；趁按下按鈕時靜音播放一瞬間，解鎖之後的自動播放
   let audioUnlocked = false;
   function unlockAudio() {
@@ -646,6 +684,7 @@
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
     unlockAudio();
     unlockKeeper(); // 保連音軌兼任「路由引導」，無論有無勾選保持連線都需解鎖
+    topUpPool();    // 補滿處女警報元素池
     if (!compatCk.checked && +fadeEnd.value < 1) ensurePlayGraph(); // 僅淡出需要 Web Audio
     keeperOn();
     try {
@@ -794,6 +833,7 @@
   });
 
   function stop() {
+    const hungEl = curEl();   // 需在 stopAlert 清空 alertEl 前捕捉，卡死保險才盯得到正確元素
     running = false;          // 先標記停止，避免 stopAlert 觸發的麥克風重連又把麥克風打開
     if (alerting) stopAlert(); // 停止監聽時也停掉正在播放的警報音
     if (rafId) cancelAnimationFrame(rafId);
@@ -806,7 +846,7 @@
     logEvent("停止監聽");
     // 媒體管線卡死時 pause 會被無視——重載脫困（使用者要求停止，故不自動恢復監聽）
     setTimeout(() => {
-      if (!player.paused) { logEvent("⚠️ 播放器卡死，重載頁面脫困"); location.reload(); }
+      if (!hungEl.paused) { logEvent("⚠️ 播放器卡死，重載頁面脫困"); location.reload(); }
     }, 700);
     volBar.style.width = "0%"; scoreBar.style.width = "0%";
   }
@@ -956,23 +996,24 @@
   function stopAlert(manual) {
     if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
     const was = alerting;
+    const el = curEl();
     alerting = false; cryMs = 0;
-    player.loop = false;
-    if (!player.paused && playGain && playCtx) {
+    alertEl = null; // 池元素用完即棄，不回收
+    el.loop = false;
+    if (!el.paused && el === player && playGain && playCtx) {
       // 結尾爆音修正：先 80ms 快速淡出到近零、等音訊管線排空才暫停。
       // 增益不在此重設（管線殘餘音訊會以全音量爆出），留給下次播放開始時的 resetGain。
       playGain.gain.cancelScheduledValues(playCtx.currentTime);
       playGain.gain.setValueAtTime(playGain.gain.value, playCtx.currentTime);
       playGain.gain.linearRampToValueAtTime(0.0001, playCtx.currentTime + 0.08);
-      setTimeout(() => { player.pause(); }, 150);
-    } else if (!player.paused) {
-      player.pause();
+      setTimeout(() => { el.pause(); }, 150);
+    } else if (!el.paused) {
+      el.pause();
     }
-    // 播放結束一律釋放媒體元素的工作階段（不論是否在監聽中）：
-    // 元素自身殘留的媒體工作階段是「播放→錄音→再播放」路由釘死的載體之一
+    // 播放結束一律釋放媒體元素的工作階段（不論是否在監聽中）
     if (was) setTimeout(() => {
-      if (!alerting && player.paused && player.src) {
-        try { player.load(); } catch (e) {} // blob src 不變，preload 會快速重新緩衝
+      if (!alerting && el.paused && el.src) {
+        try { el.load(); } catch (e) {}
       }
     }, 500);
     if (running && was) {
@@ -984,10 +1025,10 @@
       logEvent("播放結束（未在監聽中）");
     }
   }
-  player.addEventListener("ended", () => { if (alerting) stopAlert(); });
+  player.addEventListener("ended", () => { if (alerting && curEl() === player) stopAlert(); });
   // 手動按播放器的暫停也視為解除警報（stopAlert 自己觸發的 pause 進不來：alerting 已為 false）
   player.addEventListener("pause", () => {
-    if (alerting && !player.ended) {
+    if (alerting && curEl() === player && !player.ended) {
       stopAlert(true);
       cooldownUntil = performance.now() + 30000;
       logEvent("手動停止播放，30 秒內暫不重新觸發");
@@ -998,18 +1039,23 @@
   function trigger(reason) {
     if (alerting) return;
     alerting = true; cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
-    logEvent("🔊 觸發播放（" + (reason || "手動") + "）");
     if (player.src) {
       const mins = playDur.value;
       const isManual = reason === "手動播放";
       const head = isManual ? "手動播放" : "偵測到哭聲！";
-      if (+fadeEnd.value < 1 && !compatCk.checked) ensurePlayGraph();
+      // 淡出需要 MediaElementSource（僅綁在 #player 上）→ 選了淡出就沿用 #player；
+      // 否則取一個從未播放過的池元素（無任何工作階段歷史，路由重新仲裁）
+      const wantFade = mins !== "once" && +fadeEnd.value < 1 && !compatCk.checked;
+      if (wantFade) ensurePlayGraph();
+      alertEl = (wantFade && playGain) ? player : (elPool.pop() || player);
+      const el = alertEl;
+      logEvent("🔊 觸發播放（" + (reason || "手動") + (el !== player ? "，新元素，池餘 " + elPool.length : "，共用播放器") + "）");
       resetGain();
       if (mins !== "once") {
-        player.loop = true;
+        el.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
         const endVol = +fadeEnd.value;
-        const fadeOn = endVol < 1 && playGain && !compatCk.checked;
+        const fadeOn = el === player && endVol < 1 && playGain && !compatCk.checked;
         if (fadeOn) {
           // 音量從 1 線性遞減，播放結束時剛好到達選定比例。
           // ramp 掛在增益節點上、與媒體元素的 loop 解耦——音檔循環重頭時
@@ -1017,32 +1063,31 @@
           playGain.gain.setValueAtTime(1, playCtx.currentTime);
           playGain.gain.linearRampToValueAtTime(endVol, playCtx.currentTime + +mins * 60);
         }
-        setStatus("alert", head + " 循環播放 " + mins + " 分鐘…", fadeOn ? "音量將逐漸降至 " + (endVol * 100) + "%；按播放器的暫停可提前結束" : "按播放器的暫停可提前結束");
+        setStatus("alert", head + " 循環播放 " + mins + " 分鐘…", fadeOn ? "音量將逐漸降至 " + (endVol * 100) + "%；按播放器的暫停可提前結束" : "按「⏹ 停止播放」可提前結束");
       } else {
         setStatus("alert", head + " 播放中…", "");
       }
-      // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭。
-      // 路由歸位交給播放結束後的頁面重載（每次觸發都等同「第一次」），不再需要引導音軌。
+      // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
       setTimeout(() => {
-        player.currentTime = 0;
+        el.currentTime = 0;
         let playStarted = false;
-        const pr = player.play();
+        const pr = el.play();
         if (pr) pr.then(() => { playStarted = true; }).catch(() => {
-          setStatus("alert", "偵測到哭聲！但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
+          setStatus("alert", head + " 但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
           beep();
         });
-        // 播放健康檢查：媒體管線偶爾在重載後卡死（進度不動、聲音碎片循環、無法暫停），
-        // 唯一可靠的解法一樣是重載頁面
+        // 播放健康檢查：媒體管線偶爾卡死（進度不動、聲音碎片循環、無法暫停），
+        // 唯一可靠的解法是重載頁面
         setTimeout(() => {
-          if (alerting && playStarted && (player.paused || player.currentTime < 0.3)) {
+          if (alerting && playStarted && (el.paused || el.currentTime < 0.3)) {
             logEvent("⚠️ 播放管線卡死，重載頁面恢復");
             scheduleRouteReset();
           }
         }, 4000);
       }, 800);
-    } else { setStatus("alert", "偵測到哭聲！", ""); beep(); alerting = false; } // 沒有音檔時退而發出提示音
+    } else { setStatus("alert", "偵測到哭聲！", ""); logEvent("🔊 觸發（無音檔，提示音）"); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
   // 沒有選擇音檔時的備援提示音
