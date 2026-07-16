@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v42</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v43</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -655,9 +655,9 @@
   function clearPool() { elPool = []; }
   function topUpPool() {
     if (!player.src) return;
-    while (elPool.length < 8) {
+    while (elPool.length < 5) {
       const el = new Audio(player.src);
-      el.preload = "auto";
+      el.preload = "none"; // 用到才緩衝：多顆元素同時預載大音檔會造成記憶體壓力與播放劣化
       el.setAttribute("x-webkit-airplay", "allow");
       // 注意：事件處理器延到「被徵用」時才掛——解鎖的暫停是非同步落地的，
       // 若元素在解鎖完成前就被觸發徵用，早掛的 pause 處理器會把警報誤判成手動停止
@@ -677,9 +677,13 @@
   let fadeCtx = null, fadeGain = null;
   async function startFade(el, mins, endVol) {
     try {
-      fadeCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // 指定取樣率並驗證：引擎若出生在殘留的錄音工作階段，會拿到通話級取樣率
+      //（8k/16k/24k），整條播放都是劣化音質——這種情況寧可放棄淡出走乾淨路徑
+      try { fadeCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 }); }
+      catch (e) { fadeCtx = new (window.AudioContext || window.webkitAudioContext)(); }
       if (fadeCtx.state !== "running") await fadeCtx.resume();
       if (fadeCtx.state !== "running") throw new Error("引擎未獲授權");
+      if (fadeCtx.sampleRate < 40000) throw new Error("引擎取樣率劣化（" + fadeCtx.sampleRate + "Hz）");
       const src = fadeCtx.createMediaElementSource(el); // 處女元素，首次捕捉
       fadeGain = fadeCtx.createGain();
       src.connect(fadeGain);
@@ -1066,11 +1070,11 @@
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
       setTimeout(async () => {
-        // 淡出：為本輪建立專屬全新引擎；失敗自動退全音量（警報永遠有聲）。
+        // 淡出：為本輪建立專屬全新引擎；失敗或引擎劣化則自動退全音量（警報永遠有聲）。
         // 增益 ramp 與元素的 loop 解耦——音檔循環重頭時音量曲線持續遞減，銜接無跳變
         if (wantFade && el !== player) {
           const ok = await startFade(el, +mins, endVol);
-          logEvent(ok ? "淡出引擎已啟用（將降至 " + Math.round(endVol * 100) + "%）" : "⚠️ 淡出引擎未獲授權，本次全音量播放");
+          logEvent(ok ? "淡出引擎已啟用（將降至 " + Math.round(endVol * 100) + "%，取樣率 " + fadeCtx.sampleRate + "）" : "⚠️ 淡出引擎不可用（未授權或音質劣化），本次全音量播放");
         } else if (wantFade) {
           logEvent("⚠️ 元素池耗盡，本次全音量播放（重按一次開始監聽可補充）");
         }
@@ -1089,7 +1093,7 @@
             scheduleRouteReset();
           }
         }, 4000);
-      }, 800);
+      }, wantFade ? 1500 : 800); // 淡出路徑多等一點，讓錄音工作階段拆乾淨再建引擎
     } else { setStatus("alert", "偵測到哭聲！", ""); logEvent("🔊 觸發（無音檔，提示音）"); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
 
