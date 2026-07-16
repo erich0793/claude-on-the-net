@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v48</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v49</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -671,9 +671,20 @@
     });
   }
   function clearPool() { elPool = []; }
+  // 無手勢補鑄（盡力而為）：整夜多次觸發時在每次播放結束後補一顆。
+  // 未經手勢解鎖的元素在部分情況會被 iOS 擋播——擋掉時由播放失敗回復機制接手
+  function mintOne() {
+    if (!player.src || elPool.length >= 12) return;
+    const el = new Audio();
+    el.preload = "none";
+    el.src = player.src;
+    el.setAttribute("x-webkit-airplay", "allow");
+    el._real = true;
+    elPool.push(el);
+  }
   function topUpPool() {
     if (!player.src) return;
-    while (elPool.length < 5) {
+    while (elPool.length < 12) { // 一晚可能觸發多次，池要夠深（元素在換源前只是 3KB 無聲檔，成本極低）
       const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
       el.setAttribute("x-webkit-airplay", "allow");
       // 注意：事件處理器延到「被徵用」時才掛——解鎖的暫停是非同步落地的，
@@ -1046,6 +1057,7 @@
         try { el.load(); } catch (e) {}
       }
       if (fc) { try { fc.close(); } catch (e) {} }
+      mintOne(); // 盡力補鑄一顆池元素，整夜多次觸發不耗盡
     }, 500);
     if (running && was) {
       setStatus("listening", "監聽中…", "已回到偵測狀態");
@@ -1107,8 +1119,13 @@
         let playStarted = false;
         const pr = el.play();
         if (pr) pr.then(() => { playStarted = true; }).catch(() => {
-          setStatus("alert", head + " 但瀏覽器阻擋了自動播放", "請按一次「▶️ 試聽音檔」解鎖後再重新開始監聽");
-          beep();
+          // 播放被擋（元素未經手勢解鎖）——絕不能讓系統卡死在無聲的警報狀態：
+          // 立刻收尾、恢復麥克風繼續監聽，並以嗶聲作為最後手段的可聽警示
+          logEvent("⚠️ 播放被瀏覽器阻擋，已恢復監聽並以嗶聲警示（回頁面按任意播放鈕可補充元素）");
+          stopAlert(true);
+          cooldownUntil = performance.now() + 8000;
+          setStatus("alert", head + " 播放被阻擋（嗶聲警示中）", "回到頁面按一次「試聽」或「開始監聽」即可恢復正常播放");
+          setTimeout(() => { try { beep(); } catch (e) {} }, 1200); // 等麥克風恢復後發聲
         });
         // 播放健康檢查：媒體管線偶爾卡死（進度不動、聲音碎片循環、無法暫停），
         // 唯一可靠的解法是重載頁面
