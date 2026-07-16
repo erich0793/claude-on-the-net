@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v47</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v48</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -357,7 +357,7 @@
     mlBusy = false;
   }
 
-  let audioCtx, analyser, source, stream, rafId;
+  let audioCtx, analyser, source, stream, rafId, loopTimer = null;
   let freqData, timeData;
   let running = false, alerting = false;
   let cryMs = 0, lastT = 0, lastWatchdog = 0, lastInfer = 0;
@@ -870,7 +870,11 @@
     try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { /* 不支援時略過 */ }
   }
   document.addEventListener("visibilitychange", () => {
+    if (running && document.visibilityState === "hidden") {
+      logEvent("進入背景：偵測改由計時器驅動（可由之後的診斷時間戳驗證）");
+    }
     if (running && document.visibilityState === "visible") {
+      logEvent("回到前景");
       requestWake();
       if (audioCtx && audioCtx.state !== "running" && !alerting) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
@@ -883,6 +887,7 @@
     running = false;          // 先標記停止，避免 stopAlert 觸發的麥克風重連又把麥克風打開
     if (alerting) stopAlert(); // 停止監聽時也停掉正在播放的警報音
     if (rafId) cancelAnimationFrame(rafId);
+    if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (source) { source.disconnect(); source = null; } // AudioContext 留給播放共用，不關閉
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
@@ -1130,7 +1135,13 @@
 
   function loop() {
     if (!running) return;
-    rafId = requestAnimationFrame(loop);
+    // 前景用 rAF；背景時 iOS 凍結 rAF，但「錄音中的頁面」計時器仍會運轉——
+    // 切換為計時器驅動，讓偵測在瀏覽器退到背景時繼續工作
+    if (document.visibilityState === "visible") {
+      rafId = requestAnimationFrame(loop);
+    } else {
+      loopTimer = setTimeout(loop, 66);
+    }
     if (resetting || !audioCtx || !analyser) return; // 深度重置期間音訊資源不存在
 
     analyser.getByteFrequencyData(freqData);
