@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v41</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v42</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -209,7 +209,7 @@
       </select>
     </div>
     <div class="ctl" style="margin-top:14px">
-      <label><span>結束時音量（循環播放期間逐漸變小，哄睡淡出）</span></label>
+      <label><span>結束時音量（循環播放期間逐漸變小，哄睡淡出；適用於警報與手動播放，若系統拒絕淡出引擎該次自動改全音量，事件紀錄可查）</span></label>
       <select id="fadeEnd" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="1">不變（全程同音量）</option>
         <option value="0.75">結束時為 75%</option>
@@ -659,12 +659,38 @@
       const el = new Audio(player.src);
       el.preload = "auto";
       el.setAttribute("x-webkit-airplay", "allow");
-      attachAlertHandlers(el);
+      // 注意：事件處理器延到「被徵用」時才掛——解鎖的暫停是非同步落地的，
+      // 若元素在解鎖完成前就被觸發徵用，早掛的 pause 處理器會把警報誤判成手動停止
       el.muted = true; // 手勢內靜音播放一瞬完成解鎖
       const p = el.play();
-      if (p) p.then(() => { el.pause(); el.currentTime = 0; el.muted = false; })
-             .catch(() => { el.muted = false; });
+      if (p) p.then(() => {
+        if (!el._inUse) { el.pause(); el.currentTime = 0; } // 已徵用就別動它
+        el.muted = false;
+      }).catch(() => { el.muted = false; });
       elPool.push(el);
+    }
+  }
+
+  // —— 每輪播放專屬的淡出引擎：全新 AudioContext 捕捉全新池元素（皆無歷史、
+  // 播完即棄），避免「跨錄音期存活的舊引擎被 iOS 釘在手機」的路由問題。
+  // 引擎啟動失敗（無手勢授權被拒）時退回全音量純元素播放——警報永遠有聲。
+  let fadeCtx = null, fadeGain = null;
+  async function startFade(el, mins, endVol) {
+    try {
+      fadeCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (fadeCtx.state !== "running") await fadeCtx.resume();
+      if (fadeCtx.state !== "running") throw new Error("引擎未獲授權");
+      const src = fadeCtx.createMediaElementSource(el); // 處女元素，首次捕捉
+      fadeGain = fadeCtx.createGain();
+      src.connect(fadeGain);
+      fadeGain.connect(fadeCtx.destination);
+      fadeGain.gain.setValueAtTime(1, fadeCtx.currentTime);
+      fadeGain.gain.linearRampToValueAtTime(endVol, fadeCtx.currentTime + mins * 60);
+      return true;
+    } catch (e) {
+      try { if (fadeCtx) fadeCtx.close(); } catch (e2) {}
+      fadeCtx = null; fadeGain = null;
+      return false;
     }
   }
 
@@ -685,7 +711,6 @@
     unlockAudio();
     unlockKeeper(); // 保連音軌兼任「路由引導」，無論有無勾選保持連線都需解鎖
     topUpPool();    // 補滿處女警報元素池
-    if (!compatCk.checked && +fadeEnd.value < 1) ensurePlayGraph(); // 僅淡出需要 Web Audio
     keeperOn();
     try {
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
@@ -860,12 +885,7 @@
   const fadeEnd = $("fadeEnd");
   fadeEnd.value = localStorage.getItem("fadeEnd") || "1";
   if (fadeEnd.selectedIndex < 0) fadeEnd.value = "1";
-  fadeEnd.addEventListener("change", () => {
-    localStorage.setItem("fadeEnd", fadeEnd.value);
-    // 選了淡出才建立播放音訊圖（趁使用者手勢）；注意：建立後播放將經過 Web Audio，
-    // 藍牙路由可能受影響——文件對此有說明
-    if (+fadeEnd.value < 1 && !compatCk.checked) ensurePlayGraph();
-  });
+  fadeEnd.addEventListener("change", () => localStorage.setItem("fadeEnd", fadeEnd.value));
 
   // 音響相容模式：不經 Web Audio 增益節點，讓 AirPlay 能接收播放器輸出。
   // 音訊路由在建立後無法切換，變更時重新載入頁面套用。
@@ -967,27 +987,9 @@
   if (trigMode.selectedIndex < 0) trigMode.value = "cry";
   trigMode.addEventListener("change", () => { localStorage.setItem("trigMode", trigMode.value); burstTimes = []; });
 
-  // iPhone 不允許網頁直接調整 <audio> 的音量，改經 Web Audio 增益節點控制。
-  // MediaElementSource 每個元素只能建立一次，故全域保留。
-  let playCtx = null, playGain = null, micCtx = null;
-  function ensurePlayGraph() {
-    if (compatCk.checked) return; // 相容模式：播放器直接輸出，AirPlay 才收得到
-    if (!playCtx) {
-      playCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const src = playCtx.createMediaElementSource(player);
-      playGain = playCtx.createGain();
-      src.connect(playGain);
-      playGain.connect(playCtx.destination);
-    }
-    if (playCtx.state === "suspended") playCtx.resume();
-  }
-  function resetGain() {
-    if (!playGain) return;
-    playGain.gain.cancelScheduledValues(playCtx.currentTime);
-    playGain.gain.setValueAtTime(1, playCtx.currentTime);
-  }
-  // 手動播放（試聽）時恢復正常音量（僅在淡出音訊圖已建立時需要）
-  player.addEventListener("play", () => { if (!alerting) resetGain(); });
+  // 麥克風專用的 AudioContext（#player 不再被任何引擎捕捉，試聽為純元素播放；
+  // 淡出改由每輪播放專屬的 fadeCtx 搭配池元素實現）
+  let micCtx = null;
 
   let alertTimer = null;
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
@@ -997,24 +999,26 @@
     if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
     const was = alerting;
     const el = curEl();
+    const fc = fadeCtx, fg = fadeGain;
+    fadeCtx = null; fadeGain = null; // 立刻讓位給下一輪播放
     alerting = false; cryMs = 0;
     alertEl = null; // 池元素用完即棄，不回收
     el.loop = false;
-    if (!el.paused && el === player && playGain && playCtx) {
-      // 結尾爆音修正：先 80ms 快速淡出到近零、等音訊管線排空才暫停。
-      // 增益不在此重設（管線殘餘音訊會以全音量爆出），留給下次播放開始時的 resetGain。
-      playGain.gain.cancelScheduledValues(playCtx.currentTime);
-      playGain.gain.setValueAtTime(playGain.gain.value, playCtx.currentTime);
-      playGain.gain.linearRampToValueAtTime(0.0001, playCtx.currentTime + 0.08);
+    if (!el.paused && fg && fc) {
+      // 結尾爆音修正：先 80ms 快速淡出到近零、等音訊管線排空才暫停
+      fg.gain.cancelScheduledValues(fc.currentTime);
+      fg.gain.setValueAtTime(fg.gain.value, fc.currentTime);
+      fg.gain.linearRampToValueAtTime(0.0001, fc.currentTime + 0.08);
       setTimeout(() => { el.pause(); }, 150);
     } else if (!el.paused) {
       el.pause();
     }
-    // 播放結束一律釋放媒體元素的工作階段（不論是否在監聽中）
+    // 播放結束一律釋放媒體元素的工作階段與本輪淡出引擎（不論是否在監聽中）
     if (was) setTimeout(() => {
       if (!alerting && el.paused && el.src) {
         try { el.load(); } catch (e) {}
       }
+      if (fc) { try { fc.close(); } catch (e) {} }
     }, 500);
     if (running && was) {
       setStatus("listening", "監聽中…", "已回到偵測狀態");
@@ -1043,34 +1047,33 @@
       const mins = playDur.value;
       const isManual = reason === "手動播放";
       const head = isManual ? "手動播放" : "偵測到哭聲！";
-      // 淡出需要 MediaElementSource（僅綁在 #player 上）→ 選了淡出就沿用 #player；
-      // 否則取一個從未播放過的池元素（無任何工作階段歷史，路由重新仲裁）
+      // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽
       const wantFade = mins !== "once" && +fadeEnd.value < 1 && !compatCk.checked;
-      if (wantFade) ensurePlayGraph();
-      alertEl = (wantFade && playGain) ? player : (elPool.pop() || player);
+      const endVol = +fadeEnd.value;
+      alertEl = elPool.pop() || player;
       const el = alertEl;
+      el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
+      if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
       logEvent("🔊 觸發播放（" + (reason || "手動") + (el !== player ? "，新元素，池餘 " + elPool.length : "，共用播放器") + "）");
-      resetGain();
       if (mins !== "once") {
         el.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
-        const endVol = +fadeEnd.value;
-        const fadeOn = el === player && endVol < 1 && playGain && !compatCk.checked;
-        if (fadeOn) {
-          // 音量從 1 線性遞減，播放結束時剛好到達選定比例。
-          // ramp 掛在增益節點上、與媒體元素的 loop 解耦——音檔循環重頭時
-          // 增益曲線持續遞減，銜接處不會忽大忽小
-          playGain.gain.setValueAtTime(1, playCtx.currentTime);
-          playGain.gain.linearRampToValueAtTime(endVol, playCtx.currentTime + +mins * 60);
-        }
-        setStatus("alert", head + " 循環播放 " + mins + " 分鐘…", fadeOn ? "音量將逐漸降至 " + (endVol * 100) + "%；按播放器的暫停可提前結束" : "按「⏹ 停止播放」可提前結束");
+        setStatus("alert", head + " 循環播放 " + mins + " 分鐘…", (wantFade ? "淡出狀態見事件紀錄；" : "") + "按「⏹ 停止播放」可提前結束");
       } else {
         setStatus("alert", head + " 播放中…", "");
       }
       // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
-      setTimeout(() => {
+      setTimeout(async () => {
+        // 淡出：為本輪建立專屬全新引擎；失敗自動退全音量（警報永遠有聲）。
+        // 增益 ramp 與元素的 loop 解耦——音檔循環重頭時音量曲線持續遞減，銜接無跳變
+        if (wantFade && el !== player) {
+          const ok = await startFade(el, +mins, endVol);
+          logEvent(ok ? "淡出引擎已啟用（將降至 " + Math.round(endVol * 100) + "%）" : "⚠️ 淡出引擎未獲授權，本次全音量播放");
+        } else if (wantFade) {
+          logEvent("⚠️ 元素池耗盡，本次全音量播放（重按一次開始監聽可補充）");
+        }
         el.currentTime = 0;
         let playStarted = false;
         const pr = el.play();
