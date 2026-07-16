@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v45</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v46</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -579,7 +579,8 @@
     } else { player.currentTime = 0; player.play(); }
   });
   function refreshTestBtn() {
-    testBtn.textContent = !player.paused ? "⏹ 停止播放" : "▶️ 試聽音檔";
+    // 以「目前實際發聲的元素」為準（警報／手動播放走隱形池元素，不是 #player）
+    testBtn.textContent = !curEl().paused ? "⏹ 停止播放" : "▶️ 試聽音檔";
   }
   player.addEventListener("play", refreshTestBtn);
   player.addEventListener("pause", refreshTestBtn);
@@ -656,6 +657,9 @@
     return _silentUrl;
   }
   function attachAlertHandlers(el) {
+    // 池元素的播放狀態也要反映到「試聽／停止播放」按鈕文字上
+    el.addEventListener("play", refreshTestBtn);
+    el.addEventListener("pause", refreshTestBtn);
     el.addEventListener("ended", () => { if (alerting && curEl() === el) stopAlert(); });
     el.addEventListener("pause", () => {
       if (alerting && curEl() === el && !el.ended) {
@@ -1039,6 +1043,7 @@
     } else if (!el.paused) {
       el.pause();
     }
+    refreshTestBtn();
     // 播放結束一律釋放媒體元素的工作階段與本輪淡出引擎（不論是否在監聽中）
     if (was) setTimeout(() => {
       if (!alerting && el.paused && el.src) {
