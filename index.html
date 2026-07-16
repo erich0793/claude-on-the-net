@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v46</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v47</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -724,23 +724,14 @@
     }
   }
 
-  // iOS 只允許使用者手勢啟動的播放；趁按下按鈕時靜音播放一瞬間，解鎖之後的自動播放
-  let audioUnlocked = false;
-  function unlockAudio() {
-    if (!player.src || audioUnlocked) return;
-    player.muted = true;
-    const p = player.play();
-    if (p) p.then(() => {
-      player.pause(); player.currentTime = 0; player.muted = false; audioUnlocked = true;
-    }).catch(() => { player.muted = false; });
-  }
-  player.addEventListener("play", () => { audioUnlocked = true; });
+  // 註：#player 不再需要預解鎖——警報／手動播放走池元素（以無聲小檔解鎖），
+  // #player 只剩「試聽」用途且必由使用者親手觸發。舊的 unlockAudio 靜音播放
+  // 在部分 iOS 版本會漏出一瞬音樂，已移除。
 
   async function start() {
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
-    unlockAudio();
-    unlockKeeper(); // 保連音軌兼任「路由引導」，無論有無勾選保持連線都需解鎖
-    topUpPool();    // 補滿處女警報元素池
+    unlockKeeper(); // 保連音軌兼任解鎖，無論有無勾選保持連線都需解鎖
+    topUpPool();    // 補滿處女警報元素池（以無聲小檔解鎖）
     keeperOn();
     try {
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
