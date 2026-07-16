@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v43</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v44</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -641,6 +641,20 @@
   // 元素解鎖需使用者手勢，故於各按鈕的 click 手勢內補滿。
   let elPool = [], alertEl = null;
   function curEl() { return alertEl || player; }
+  // 極小無聲檔（0.2 秒）：專供元素解鎖用——用真音檔解鎖會讓多顆元素同時解碼
+  // 大檔案，壓垮 iOS 混音管線、造成同時進行的可聽播放變質
+  let _silentUrl = null;
+  function silentUrl() {
+    if (_silentUrl) return _silentUrl;
+    const n = 1600, b = new DataView(new ArrayBuffer(44 + n * 2));
+    const w8 = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
+    w8(0, "RIFF"); b.setUint32(4, 36 + n * 2, true); w8(8, "WAVE"); w8(12, "fmt ");
+    b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
+    b.setUint32(24, 8000, true); b.setUint32(28, 16000, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
+    w8(36, "data"); b.setUint32(40, n * 2, true);
+    _silentUrl = URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
+    return _silentUrl;
+  }
   function attachAlertHandlers(el) {
     el.addEventListener("ended", () => { if (alerting && curEl() === el) stopAlert(); });
     el.addEventListener("pause", () => {
@@ -656,15 +670,19 @@
   function topUpPool() {
     if (!player.src) return;
     while (elPool.length < 5) {
-      const el = new Audio(player.src);
-      el.preload = "none"; // 用到才緩衝：多顆元素同時預載大音檔會造成記憶體壓力與播放劣化
+      const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
       el.setAttribute("x-webkit-airplay", "allow");
       // 注意：事件處理器延到「被徵用」時才掛——解鎖的暫停是非同步落地的，
       // 若元素在解鎖完成前就被觸發徵用，早掛的 pause 處理器會把警報誤判成手動停止
       el.muted = true; // 手勢內靜音播放一瞬完成解鎖
       const p = el.play();
       if (p) p.then(() => {
-        if (!el._inUse) { el.pause(); el.currentTime = 0; } // 已徵用就別動它
+        if (!el._inUse) {
+          el.pause();
+          el.preload = "none";   // 換上真音檔但用到才緩衝
+          el.src = player.src;
+          el._real = true;
+        }
         el.muted = false;
       }).catch(() => { el.muted = false; });
       elPool.push(el);
@@ -1057,6 +1075,7 @@
       alertEl = elPool.pop() || player;
       const el = alertEl;
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
+      if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
       logEvent("🔊 觸發播放（" + (reason || "手動") + (el !== player ? "，新元素，池餘 " + elPool.length : "，共用播放器") + "）");
       if (mins !== "once") {
