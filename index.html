@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v44</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v45</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -699,7 +699,11 @@
       //（8k/16k/24k），整條播放都是劣化音質——這種情況寧可放棄淡出走乾淨路徑
       try { fadeCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 }); }
       catch (e) { fadeCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-      if (fadeCtx.state !== "running") await fadeCtx.resume();
+      if (fadeCtx.state !== "running") {
+        // iOS 拒絕無手勢啟動時，resume() 會永遠懸置而非失敗——必須設時限，
+        // 否則整條播放流程卡死、警報無聲（比沒有淡出嚴重得多）
+        await Promise.race([fadeCtx.resume(), new Promise(r => setTimeout(r, 1200))]);
+      }
       if (fadeCtx.state !== "running") throw new Error("引擎未獲授權");
       if (fadeCtx.sampleRate < 40000) throw new Error("引擎取樣率劣化（" + fadeCtx.sampleRate + "Hz）");
       const src = fadeCtx.createMediaElementSource(el); // 處女元素，首次捕捉
@@ -1092,7 +1096,8 @@
         // 淡出：為本輪建立專屬全新引擎；失敗或引擎劣化則自動退全音量（警報永遠有聲）。
         // 增益 ramp 與元素的 loop 解耦——音檔循環重頭時音量曲線持續遞減，銜接無跳變
         if (wantFade && el !== player) {
-          const ok = await startFade(el, +mins, endVol);
+          let ok = false;
+          try { ok = await startFade(el, +mins, endVol); } catch (e) { ok = false; } // 任何意外都不得阻擋播放
           logEvent(ok ? "淡出引擎已啟用（將降至 " + Math.round(endVol * 100) + "%，取樣率 " + fadeCtx.sampleRate + "）" : "⚠️ 淡出引擎不可用（未授權或音質劣化），本次全音量播放");
         } else if (wantFade) {
           logEvent("⚠️ 元素池耗盡，本次全音量播放（重按一次開始監聽可補充）");
