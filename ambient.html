@@ -1,0 +1,351 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>背景音樂模式（實驗）- 嬰兒哭聲偵測</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171c24; --panel-2: #1f2732; --line: #2a3340;
+    --text: #e7edf3; --muted: #97a3b2; --accent: #4dabf7; --accent-2: #7c5cff;
+    --danger: #ff5c72; --ok: #3ddc84; --warn: #ffc857;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+    background: radial-gradient(1200px 800px at 70% -10%, #1a2130 0%, var(--bg) 55%);
+    color: var(--text); min-height: 100vh; padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 16px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); padding: 12px 18px; border-radius: 10px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; color: #fff; font-weight: 600; font-size: 16px; }
+  button.danger { border-color: var(--danger); color: var(--danger); }
+  .status { display: flex; align-items: center; gap: 12px; padding: 16px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--line); margin-bottom: 14px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); animation: pulse 1.6s infinite; }
+  .dot.boost { background: var(--warn); box-shadow: 0 0 14px var(--warn); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(61,220,132,.5)} 70%{box-shadow:0 0 0 12px rgba(61,220,132,0)} 100%{box-shadow:0 0 0 0 rgba(61,220,132,0)} }
+  .status .txt { font-size: 15px; font-weight: 600; }
+  .status .txt small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .ctl { margin-top: 14px; }
+  .ctl label { font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; margin-bottom: 6px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .warn { background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.7; margin-bottom: 16px; }
+  .bar { height: 10px; background: #0b0f14; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+  .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--danger)); transition: width .1s linear; }
+  .kv { font-size: 12px; color: var(--muted); display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+  .kv b { color: var(--text); }
+  #logBox { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); max-height: 180px; overflow-y: auto; line-height: 1.9; }
+  a { color: var(--accent); }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <h1>🌙 背景音樂模式 <span class="tag">實驗 a1</span></h1>
+  <div class="sub">小聲的背景音樂整晚陪伴；偵測到哭聲時自動變大聲安撫幾分鐘，再緩緩降回。<a href="index.html">← 回主頁（正式版不受此實驗影響）</a></div>
+
+  <div class="warn">
+    ⚠️ 此模式需要「邊聽邊播」，受 iOS 限制<b>藍牙／AirPlay 音響收不到聲音</b>。
+    請用<b>手機喇叭</b>或以 <b>AUX 音源線（有線）</b>連接音響。音檔沿用主頁記住的音檔。
+  </div>
+
+  <div class="card">
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <div class="txt" id="st">尚未啟動<small id="stSub">按下方按鈕開始（需要麥克風權限）</small></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="goBtn">🌙 啟動背景音樂＋偵測</button>
+      <button class="danger" id="stopBtn" disabled>停止</button>
+      <button id="boostBtn" disabled>🔊 手動觸發變大聲</button>
+    </div>
+    <div class="ctl" style="margin-top:16px">
+      <div class="bar"><i id="volBar"></i></div>
+      <div class="kv">
+        <span>目前音量 <b id="nowVol">–</b></span>
+        <span>環境 <b id="dbVal">–</b></span>
+        <span>背景基準 <b id="floorVal">–</b></span>
+        <span>短聲 <b id="burstVal">–</b></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ctl">
+      <label><span>平時音量（baseline）</span><span id="baseVal"></span></label>
+      <input type="range" id="baseVol" min="5" max="60" value="20" />
+    </div>
+    <div class="ctl">
+      <label><span>安撫音量（偵測到哭聲時）</span><span id="boostValL"></span></label>
+      <input type="range" id="boostVol" min="50" max="100" value="100" />
+    </div>
+    <div class="ctl">
+      <label><span>安撫持續（分鐘）</span><span id="minsVal"></span></label>
+      <input type="range" id="boostMins" min="1" max="10" value="3" />
+    </div>
+    <div class="ctl">
+      <label><span>靈敏度</span><span id="sensVal"></span></label>
+      <input type="range" id="sens" min="0" max="100" value="55" />
+    </div>
+    <div class="hint" style="margin-top:12px">
+      偵測沿用主系統的聲學引擎（自適應背景基準＋嬰兒基頻＋短聲計數）。背景音樂本身會被自動當成環境音；白噪音類音檔效果最佳。變大聲期間暫停偵測，降回後重新校準 2 秒再繼續。
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="font-size:14px; font-weight:600; margin-bottom:8px">📋 事件紀錄</div>
+    <div id="logBox">（尚無紀錄）</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const goBtn = $("goBtn"), stopBtn = $("stopBtn"), boostBtn = $("boostBtn");
+  const dot = $("dot"), st = $("st"), stSub = $("stSub");
+  const baseVol = $("baseVol"), boostVol = $("boostVol"), boostMins = $("boostMins"), sens = $("sens");
+  const volBar = $("volBar"), nowVol = $("nowVol"), dbVal = $("dbVal"), floorVal = $("floorVal"), burstVal = $("burstVal");
+  const logBox = $("logBox");
+
+  // —— 紀錄（獨立於主頁的儲存鍵）——
+  let logArr = [];
+  try { logArr = JSON.parse(localStorage.getItem("evlog_ambient") || "[]"); } catch (e) {}
+  function renderLog() { logBox.innerHTML = logArr.slice().reverse().map(l => l.replace(/</g, "&lt;")).join("<br>") || "（尚無紀錄）"; }
+  function logEvent(m) {
+    const t = new Date(), p = n => (n < 10 ? "0" : "") + n;
+    logArr.push(p(t.getMonth() + 1) + "/" + p(t.getDate()) + " " + p(t.getHours()) + ":" + p(t.getMinutes()) + ":" + p(t.getSeconds()) + "　" + m);
+    if (logArr.length > 120) logArr = logArr.slice(-120);
+    try { localStorage.setItem("evlog_ambient", JSON.stringify(logArr)); } catch (e) {}
+    renderLog();
+  }
+  renderLog();
+
+  // —— 滑桿顯示與記憶 ——
+  const prefs = [["baseVol", baseVol], ["boostVol", boostVol], ["boostMins", boostMins], ["sensA", sens]];
+  prefs.forEach(([k, el]) => {
+    const v = localStorage.getItem("amb_" + k);
+    if (v !== null) el.value = v;
+    el.addEventListener("input", () => { localStorage.setItem("amb_" + k, el.value); refreshLabels(); applyBaselineLive(); });
+  });
+  function refreshLabels() {
+    $("baseVal").textContent = baseVol.value + "%";
+    $("boostValL").textContent = boostVol.value + "%";
+    $("minsVal").textContent = boostMins.value + " 分鐘";
+    $("sensVal").textContent = sens.value + "%";
+  }
+  refreshLabels();
+
+  // —— 取主頁記住的音檔（同一個 IndexedDB）——
+  function loadAudioBlob() {
+    return new Promise((res, rej) => {
+      const rq = indexedDB.open("babycry", 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore("files");
+      rq.onerror = () => rej(rq.error);
+      rq.onsuccess = () => {
+        const g = rq.result.transaction("files").objectStore("files").get("alert");
+        g.onsuccess = () => g.result && g.result.blob ? res(g.result.blob) : rej(new Error("主頁尚未記住音檔，請先到主頁選擇音檔"));
+        g.onerror = () => rej(g.error);
+      };
+    });
+  }
+
+  // —— 狀態 ——
+  let running = false, boosting = false, rafId = null, loopTimer = null;
+  let actx = null, gain = null, musicEl = null;   // 音樂引擎（啟動手勢內建立）
+  let mctx = null, analyser = null, source = null, stream = null; // 麥克風
+  let freqData = null, timeData = null;
+  let noiseFloor = -60, calUntil = 0, lastT = 0;
+  let burstMs = 0, burstTimes = [], boostTimer = null, wakeLock = null;
+
+  function setSt(mode, main, sub) {
+    dot.className = "dot" + (mode ? " " + mode : "");
+    st.firstChild.textContent = main;
+    stSub.textContent = sub || "";
+  }
+
+  function baseGain() { return +baseVol.value / 100; }
+  function boostGain() { return +boostVol.value / 100; }
+  function applyBaselineLive() { // 拉桿即時反映（非 boost 期間）
+    if (gain && !boosting) gain.gain.setTargetAtTime(baseGain(), actx.currentTime, 0.2);
+    nowVol.textContent = (boosting ? boostVol.value : baseVol.value) + "%";
+  }
+
+  goBtn.addEventListener("click", async () => {
+    try {
+      const blob = await loadAudioBlob();
+      // 音樂引擎：在手勢內建立（授權完整、音質健康檢查）
+      try { actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 }); }
+      catch (e) { actx = new (window.AudioContext || window.webkitAudioContext)(); }
+      if (actx.state !== "running") await Promise.race([actx.resume(), new Promise(r => setTimeout(r, 1500))]);
+      musicEl = new Audio(URL.createObjectURL(blob));
+      musicEl.loop = true;
+      const src = actx.createMediaElementSource(musicEl);
+      gain = actx.createGain();
+      gain.gain.value = baseGain();
+      src.connect(gain); gain.connect(actx.destination);
+      await musicEl.play();
+      logEvent("背景音樂開始（baseline " + baseVol.value + "%，引擎取樣率 " + actx.sampleRate + "）");
+
+      // 麥克風（音樂之後才開：先讓音樂在乾淨的工作階段裡站穩）
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+      });
+      mctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (mctx.state !== "running") await mctx.resume();
+      source = mctx.createMediaStreamSource(stream);
+      analyser = mctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.6;
+      source.connect(analyser);
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+      timeData = new Float32Array(analyser.fftSize);
+
+      running = true;
+      lastT = performance.now();
+      calUntil = lastT + 4000; // 校準期加長：讓基準吸收背景音樂
+      goBtn.disabled = true; stopBtn.disabled = false; boostBtn.disabled = false;
+      setSt("on", "陪伴中（baseline）", "偵測到哭聲會自動變大聲 " + boostMins.value + " 分鐘");
+      logEvent("開始偵測（靈敏度 " + sens.value + "%）");
+      try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+      loop();
+    } catch (e) {
+      setSt("", "啟動失敗", e.message || String(e));
+      logEvent("⚠️ 啟動失敗：" + (e.message || e));
+      cleanup();
+    }
+  });
+
+  stopBtn.addEventListener("click", () => { logEvent("手動停止"); cleanup(); });
+
+  function cleanup() {
+    running = false; boosting = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (loopTimer) clearTimeout(loopTimer);
+    if (boostTimer) clearTimeout(boostTimer);
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (musicEl) { try { musicEl.pause(); } catch (e) {} }
+    try { if (mctx) mctx.close(); } catch (e) {}
+    try { if (actx) actx.close(); } catch (e) {}
+    actx = gain = musicEl = mctx = analyser = source = stream = null;
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    goBtn.disabled = false; stopBtn.disabled = true; boostBtn.disabled = true;
+    setSt("", "已停止", "");
+    volBar.style.width = "0%";
+  }
+
+  boostBtn.addEventListener("click", () => { if (running && !boosting) startBoost("手動"); });
+
+  function startBoost(reason) {
+    boosting = true;
+    burstMs = 0; burstTimes = [];
+    const mins = +boostMins.value;
+    gain.gain.cancelScheduledValues(actx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, actx.currentTime);
+    gain.gain.linearRampToValueAtTime(boostGain(), actx.currentTime + 1.5); // 1.5 秒迎上去
+    setSt("boost", "安撫中（" + boostVol.value + "%）", mins + " 分鐘後降回 baseline");
+    logEvent("🔊 變大聲（" + reason + "，" + boostVol.value + "%，" + mins + " 分鐘）");
+    nowVol.textContent = boostVol.value + "%";
+    boostTimer = setTimeout(endBoost, mins * 60000);
+  }
+  function endBoost() {
+    if (!running) return;
+    gain.gain.cancelScheduledValues(actx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, actx.currentTime);
+    gain.gain.linearRampToValueAtTime(baseGain(), actx.currentTime + 10); // 10 秒緩降，不驚醒
+    setTimeout(() => {
+      boosting = false;
+      calUntil = performance.now() + 2000; // 降回後重新校準基準
+      if (running) { setSt("on", "陪伴中（baseline）", "已降回 " + baseVol.value + "%"); nowVol.textContent = baseVol.value + "%"; }
+      logEvent("降回 baseline（" + baseVol.value + "%）");
+    }, 10500);
+  }
+
+  // —— 偵測核心（沿用主系統：自相關基頻＋自適應基準＋短聲計數）——
+  function estimatePitch() {
+    const N = 1024, sr = mctx.sampleRate, off = timeData.length - N;
+    let energy = 0;
+    for (let i = 0; i < N; i++) { const v = timeData[off + i]; energy += v * v; }
+    if (energy < 1e-6) return { f0: 0, r: 0 };
+    const minLag = Math.floor(sr / 1000), maxLag = Math.min(N - 1, Math.floor(sr / 150));
+    const minScan = Math.max(2, Math.floor(sr / 2500));
+    let bestR = 0, bestLag = 0, started = false;
+    for (let lag = minScan; lag <= maxLag; lag++) {
+      let sum = 0;
+      for (let i = 0; i < N - lag; i++) sum += timeData[off + i] * timeData[off + i + lag];
+      const r = sum / (energy * (N - lag) / N);
+      if (!started) { if (r < 0.3) started = true; continue; }
+      if (lag > minLag + 1 && r > bestR) { bestR = r; bestLag = lag; }
+    }
+    return { f0: bestLag ? sr / bestLag : 0, r: bestR };
+  }
+
+  function loop() {
+    if (!running) return;
+    if (document.visibilityState === "visible") rafId = requestAnimationFrame(loop);
+    else loopTimer = setTimeout(loop, 66);
+    if (!analyser) return;
+
+    analyser.getByteFrequencyData(freqData);
+    analyser.getFloatTimeDomainData(timeData);
+
+    let sum = 0;
+    for (let i = 0; i < timeData.length; i++) sum += timeData[i] * timeData[i];
+    const db = 20 * Math.log10(Math.sqrt(sum / timeData.length) + 1e-9);
+
+    const now = performance.now();
+    const dt = Math.min(now - lastT, 100); lastT = now;
+
+    // 背景基準（含背景音樂）：boost 期間凍結
+    if (!boosting) {
+      if (db < noiseFloor) noiseFloor += (db - noiseFloor) * 0.2;
+      else noiseFloor += (now < calUntil) ? (db - noiseFloor) * 0.05 : 0.0005 * dt;
+    }
+
+    const nyq = mctx.sampleRate / 2, binHz = nyq / freqData.length;
+    let total = 0, voiceBand = 0, peakMag = 0, peakBin = 0;
+    for (let i = 0; i < freqData.length; i++) {
+      const m = freqData[i], hz = i * binHz;
+      if (hz <= 8000) total += m;
+      if (hz >= 200 && hz <= 4000) voiceBand += m;
+      if (hz >= 150 && hz <= 1500 && m > peakMag) { peakMag = m; peakBin = i; }
+    }
+    const ratio = total > 0 ? voiceBand / total : 0;
+    const domFreq = peakBin * binHz;
+
+    const pe = estimatePitch();
+    const margin = 22 - (+sens.value / 100) * 17 - 5;
+    const loud = db > Math.max(-68, noiseFloor + margin);
+    const weakLoud = db > Math.max(-62, noiseFloor + 3);
+    const babyPitch = pe.r > 0.3 && pe.f0 >= 230 && pe.f0 <= 1100;
+    const adultVoice = pe.r > 0.35 && pe.f0 > 0 && pe.f0 < 220;
+    const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > 30 && ratio > 0.3;
+    const cryLike = !adultVoice && weakLoud && (babyPitch || spectralCry);
+
+    if (!boosting && now >= calUntil) {
+      if (cryLike) burstMs += dt;
+      else {
+        if (burstMs >= 180) { burstTimes.push(now); logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + pe.f0.toFixed(0) + "Hz，第 " + burstTimes.length + " 聲）"); }
+        burstMs = 0;
+      }
+      while (burstTimes.length && now - burstTimes[0] > 25000) burstTimes.shift();
+      if (burstTimes.length >= 2) startBoost("偵測到哭聲");
+    }
+
+    const volPct = Math.max(0, Math.min(100, (db + 70) / 70 * 100));
+    volBar.style.width = volPct.toFixed(0) + "%";
+    dbVal.textContent = db.toFixed(0) + " dB";
+    floorVal.textContent = noiseFloor.toFixed(0) + " dB";
+    burstVal.textContent = boosting ? "安撫中" : burstTimes.length + " / 2";
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (running && document.visibilityState === "visible") {
+      navigator.wakeLock && navigator.wakeLock.request("screen").then(w => { wakeLock = w; }).catch(() => {});
+    }
+  });
+})();
+</script>
