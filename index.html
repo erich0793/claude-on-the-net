@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v49</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v50</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -116,6 +116,7 @@
       <input type="file" id="anyFileInput" style="display:none" />
     </div>
     <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
+    <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
 
     <div id="trimBox" style="display:none; margin-top:14px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--panel-2)">
       <div style="font-size:14px; font-weight:600; margin-bottom:10px">✂️ 剪短音檔（在你的裝置上處理，不會上傳）</div>
@@ -209,7 +210,7 @@
       </select>
     </div>
     <div class="ctl" style="margin-top:14px">
-      <label><span>結束時音量（循環播放期間逐漸變小，哄睡淡出；適用於警報與手動播放，若系統拒絕淡出引擎該次自動改全音量，事件紀錄可查）</span></label>
+      <label><span>結束時音量（循環播放期間逐漸變小，哄睡淡出；僅作用於手動播放——偵測觸發的警報因 iOS 限制一律全音量播放）</span></label>
       <select id="fadeEnd" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="1">不變（全程同音量）</option>
         <option value="0.75">結束時為 75%</option>
@@ -220,12 +221,6 @@
     </div>
     <div class="sect">音響 / 連線</div>
     <div class="ctl">
-      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
-        <input type="checkbox" id="compatCk" style="accent-color:var(--accent)">
-        <span>音響相容模式：AirPlay 聽不到聲音時開啟（淡出功能會停用；改用藍牙連音響則不需開啟）</span>
-      </label>
-    </div>
-    <div class="ctl" style="margin-top:12px">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
         <input type="checkbox" id="keepCk" style="accent-color:var(--accent)">
         <span>🔗 保持音響連線：每 4 分鐘向音響發送 5 秒聽不見的保連訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機</span>
@@ -924,15 +919,8 @@
   if (fadeEnd.selectedIndex < 0) fadeEnd.value = "1";
   fadeEnd.addEventListener("change", () => localStorage.setItem("fadeEnd", fadeEnd.value));
 
-  // 音響相容模式：不經 Web Audio 增益節點，讓 AirPlay 能接收播放器輸出。
-  // 音訊路由在建立後無法切換，變更時重新載入頁面套用。
-  const compatCk = $("compatCk");
-  compatCk.checked = localStorage.getItem("compat") === "1";
-  fadeEnd.disabled = compatCk.checked;
-  compatCk.addEventListener("change", () => {
-    localStorage.setItem("compat", compatCk.checked ? "1" : "0");
-    location.reload();
-  });
+  // （舊「音響相容模式」已移除：池元素架構下預設播放即純元素輸出，
+  //  AirPlay／藍牙皆可直達；停用淡出用「結束時音量＝不變」即可）
 
   // 保持音響連線：監聽期間循環播放 1 秒的無聲音軌（數位零訊號，喇叭不出聲），
   // 讓 AirPlay／藍牙路由與音響不因閒置而斷線或自動關機
@@ -1086,10 +1074,13 @@
       const mins = playDur.value;
       const isManual = reason === "手動播放";
       const head = isManual ? "手動播放" : "偵測到哭聲！";
-      // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽
-      const wantFade = mins !== "once" && +fadeEnd.value < 1 && !compatCk.checked;
+      // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽。
+      // 淡出僅手動播放嘗試：警報無手勢、淡出引擎必被 iOS 拒絕（實測 100%），
+      // 跳過可省下約 2 秒的等待，警報更快出聲
+      const wantFade = isManual && mins !== "once" && +fadeEnd.value < 1;
       const endVol = +fadeEnd.value;
-      alertEl = elPool.pop() || player;
+      // FIFO：先用最早的「手勢解鎖」元素，無手勢補鑄的（可能被擋播）留到最後
+      alertEl = elPool.shift() || player;
       const el = alertEl;
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
@@ -1141,6 +1132,7 @@
 
   // 沒有選擇音檔時的備援提示音
   function beep() {
+    if (!audioCtx) return;
     if (audioCtx.state !== "running") audioCtx.resume();
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
     o.type = "sine"; o.frequency.value = 880;
