@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v50</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v51</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -269,7 +269,12 @@
     const t = new Date();
     const pad = n => (n < 10 ? "0" : "") + n;
     logArr.push(pad(t.getMonth() + 1) + "/" + pad(t.getDate()) + " " + pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds()) + "　" + msg);
-    if (logArr.length > 200) logArr = logArr.slice(-200);
+    // 超量時優先丟棄最舊的「診斷」行：診斷每 10 秒一筆，會把半夜的觸發、
+    // 阻擋、麥克風事件整批洗掉，隔天就無從回顧
+    while (logArr.length > 400) {
+      const i = logArr.findIndex(l => l.indexOf("診斷：") >= 0);
+      logArr.splice(i >= 0 ? i : 0, 1);
+    }
     try { localStorage.setItem("evlog", JSON.stringify(logArr)); } catch (e) {}
     renderLog();
   }
@@ -637,6 +642,15 @@
   // 元素解鎖需使用者手勢，故於各按鈕的 click 手勢內補滿。
   let elPool = [], alertEl = null;
   function curEl() { return alertEl || player; }
+  // 元素身分標記：播放被 iOS 擋下時，靠編號／出身／年齡才能判斷是
+  //「一開始就沒解鎖」還是「解鎖後擱置太久失效」
+  let elSeq = 0;
+  function tagEl(el, origin) { el._id = ++elSeq; el._born = Date.now(); el._origin = origin; }
+  function elTag(el) {
+    if (!el || !el._id) return "共用播放器";
+    return "元素#" + el._id + " " + el._origin + (el._unlockOK ? "✓" : "✗")
+      + " 齡" + Math.round((Date.now() - el._born) / 60000) + "分 rs=" + el.readyState;
+  }
   // 極小無聲檔（0.2 秒）：專供元素解鎖用——用真音檔解鎖會讓多顆元素同時解碼
   // 大檔案，壓垮 iOS 混音管線、造成同時進行的可聽播放變質
   let _silentUrl = null;
@@ -675,13 +689,16 @@
     el.src = player.src;
     el.setAttribute("x-webkit-airplay", "allow");
     el._real = true;
+    tagEl(el, "補鑄"); el._unlockOK = false; // 無手勢：本來就沒有解鎖
     elPool.push(el);
   }
   function topUpPool() {
     if (!player.src) return;
+    const before = elPool.length;
     while (elPool.length < 12) { // 一晚可能觸發多次，池要夠深（元素在換源前只是 3KB 無聲檔，成本極低）
       const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
       el.setAttribute("x-webkit-airplay", "allow");
+      tagEl(el, "解鎖");
       // 注意：事件處理器延到「被徵用」時才掛——解鎖的暫停是非同步落地的，
       // 若元素在解鎖完成前就被觸發徵用，早掛的 pause 處理器會把警報誤判成手動停止
       el.muted = true; // 手勢內靜音播放一瞬完成解鎖
@@ -694,9 +711,19 @@
           el._real = true;
         }
         el.muted = false;
-      }).catch(() => { el.muted = false; });
+        el._unlockOK = true;
+      }).catch(err => { el.muted = false; el._unlockOK = false; el._unlockErr = (err && err.name) || "未知"; });
       elPool.push(el);
     }
+    // 解鎖是非同步落地的，且失敗至今完全靜默——補一行摘要，
+    // 才能分辨「一開始就沒解鎖成功」與「解鎖成功但擱置後失效」
+    if (elPool.length > before) setTimeout(() => {
+      const ok = elPool.filter(e => e._unlockOK).length;
+      const tally = {};
+      elPool.forEach(e => { if (e._unlockErr) tally[e._unlockErr] = (tally[e._unlockErr] || 0) + 1; });
+      const errs = Object.keys(tally).map(k => k + "×" + tally[k]);
+      logEvent("元素池已備妥：解鎖 " + ok + "/" + elPool.length + (errs.length ? "（失敗：" + errs.join("、") + "）" : ""));
+    }, 1500);
   }
 
   // —— 每輪播放專屬的淡出引擎：全新 AudioContext 捕捉全新池元素（皆無歷史、
@@ -974,6 +1001,7 @@
   }
   let pulseN = 0;
   let pulseFails = 0;
+  let lastPulseOK = 0; // 最後一次「無手勢播放成功」的時戳
   function keepPulse() {
     if (!running || alerting || recovering || pulsing || resetting) return;
     pulsing = true;
@@ -985,10 +1013,13 @@
       const p = keeper.play();
       if (p) p.then(() => {
         pulseN++; pulseFails = 0;
-        if (pulseN <= 3 || pulseN % 5 === 0) logEvent("保連脈衝 #" + pulseN + " 已送出");
-      }).catch(() => {
+        // 每次都記：這是「此刻無手勢播放是否還被允許」的唯一時間線參照，
+        // 播放被擋時要拿它來比對（脈衝剛成功卻擋掉音樂＝問題出在元素個體）
+        lastPulseOK = Date.now();
+        logEvent("保連脈衝 #" + pulseN + " 已送出");
+      }).catch(err => {
         pulseFails++;
-        logEvent("⚠️ 保連脈衝被瀏覽器阻擋");
+        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "）");
         if (pulseFails >= 2 && keepTimer) { // 連續被擋代表播放授權已失效，別再白白中斷麥克風
           clearInterval(keepTimer); keepTimer = null;
           logEvent("保連脈衝連續被阻擋，已自動暫停此功能");
@@ -1085,7 +1116,7 @@
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
-      logEvent("🔊 觸發播放（" + (reason || "手動") + (el !== player ? "，新元素，池餘 " + elPool.length : "，共用播放器") + "）");
+      logEvent("🔊 觸發播放（" + (reason || "手動") + (el !== player ? "，新元素#" + el._id + "，池餘 " + elPool.length : "，共用播放器") + "）");
       if (mins !== "once") {
         el.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
@@ -1109,10 +1140,15 @@
         el.currentTime = 0;
         let playStarted = false;
         const pr = el.play();
-        if (pr) pr.then(() => { playStarted = true; }).catch(() => {
+        if (pr) pr.then(() => { playStarted = true; }).catch(err => {
           // 播放被擋（元素未經手勢解鎖）——絕不能讓系統卡死在無聲的警報狀態：
-          // 立刻收尾、恢復麥克風繼續監聽，並以嗶聲作為最後手段的可聽警示
-          logEvent("⚠️ 播放被瀏覽器阻擋，已恢復監聽並以嗶聲警示（回頁面按任意播放鈕可補充元素）");
+          // 立刻收尾、恢復麥克風繼續監聽，並以嗶聲作為最後手段的可聽警示。
+          // 錯誤名稱是唯一能分辨病因的線索（NotAllowedError＝授權／AbortError＝
+          // 被打斷／NotSupportedError＝來源），連同元素身分與脈衝時間線一起留證
+          logEvent("⚠️ 播放被瀏覽器阻擋（" + ((err && err.name) || "未知") + "｜" + elTag(el)
+            + " " + (document.visibilityState === "visible" ? "前景" : "背景")
+            + (lastPulseOK ? "｜距上次脈衝 " + Math.round((Date.now() - lastPulseOK) / 1000) + " 秒" : "｜尚無脈衝紀錄")
+            + "），已恢復監聽並以嗶聲警示（回頁面按任意播放鈕可補充元素）");
           stopAlert(true);
           cooldownUntil = performance.now() + 8000;
           setStatus("alert", head + " 播放被阻擋（嗶聲警示中）", "回到頁面按一次「試聽」或「開始監聽」即可恢復正常播放");
