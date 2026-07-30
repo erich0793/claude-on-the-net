@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v51</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v52</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -867,6 +867,7 @@
   }
 
   let recovering = false;
+  let micOffAt = 0; // 主動關閉麥克風的時戳：用來記錄「聽不見」的空窗有多長
   async function recoverMic(silent) {
     if (recovering || !running || alerting || pulsing || resetting) return;
     const t0 = stream && stream.getAudioTracks()[0];
@@ -885,7 +886,11 @@
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
       calUntil = performance.now() + 2000; // 重連後快速重校背景噪音基準，期間不觸發
-      logEvent("麥克風重連：" + ((track && track.label) || "未知")); // 若顯示藍牙裝置名即為路由問題的元兇
+      // 若顯示藍牙裝置名即為路由問題的元兇；離線秒數用來抓「脈衝／播放後遲遲拿不回
+      // 麥克風」的失聰空窗（背景時 getUserMedia 有被拖住的跡象）
+      logEvent("麥克風重連：" + ((track && track.label) || "未知")
+        + (micOffAt ? "（離線 " + Math.round((Date.now() - micOffAt) / 1000) + " 秒）" : ""));
+      micOffAt = 0;
       if (!silent) {
         if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
         logEvent("麥克風中斷後已自動重連");
@@ -904,7 +909,7 @@
   }
   document.addEventListener("visibilitychange", () => {
     if (running && document.visibilityState === "hidden") {
-      logEvent("進入背景：偵測改由計時器驅動（可由之後的診斷時間戳驗證）");
+      logEvent("進入背景：偵測改由計時器驅動（每分鐘的「背景偵測運作中」心跳可驗證）");
     }
     if (running && document.visibilityState === "visible") {
       logEvent("回到前景");
@@ -1006,7 +1011,7 @@
     if (!running || alerting || recovering || pulsing || resetting) return;
     pulsing = true;
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
-    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
     setTimeout(() => {
       if (!pulsing) return;
@@ -1016,7 +1021,7 @@
         // 每次都記：這是「此刻無手勢播放是否還被允許」的唯一時間線參照，
         // 播放被擋時要拿它來比對（脈衝剛成功卻擋掉音樂＝問題出在元素個體）
         lastPulseOK = Date.now();
-        logEvent("保連脈衝 #" + pulseN + " 已送出");
+        logEvent("保連脈衝 #" + pulseN + " 已送出（" + (document.visibilityState === "visible" ? "前景" : "背景") + "）");
       }).catch(err => {
         pulseFails++;
         logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "）");
@@ -1125,7 +1130,7 @@
         setStatus("alert", head + " 播放中…", "");
       }
       // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭
-      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
       setTimeout(async () => {
         // 淡出：為本輪建立專屬全新引擎；失敗或引擎劣化則自動退全音量（警報永遠有聲）。
@@ -1178,6 +1183,9 @@
     o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.6);
   }
 
+  // 背景心跳狀態：診斷行受「夠大聲」把關，安靜時根本不輸出，無法用來驗證
+  // 背景偵測是否還活著（這正是先前誤判的來源）
+  let bgT0 = 0, bgFrames = 0, bgPeak = -120;
   function loop() {
     if (!running) return;
     // 前景用 rAF；背景時 iOS 凍結 rAF，但「錄音中的頁面」計時器仍會運轉——
@@ -1313,6 +1321,20 @@
     floorVal.textContent = noiseFloor.toFixed(0) + " dB";
     f0Val.textContent = pe.r > 0.35 && pe.f0 > 0 ? pe.f0.toFixed(0) + " Hz" : "無週期";
     burstVal.textContent = fuss ? burstTimes.length + " / 2" : "（哀叫模式未開）";
+    // 背景心跳：頁面在背景時每 60 秒記一行，證明偵測迴圈確實還在跑。
+    // 幀數同時透露計時器有沒有被 iOS 降頻（66ms 節奏約 900 幀／分鐘）
+    if (document.visibilityState === "visible") { bgT0 = 0; }
+    else {
+      if (!bgT0) { bgT0 = now; bgFrames = 0; bgPeak = -120; }
+      bgFrames++;
+      if (micLive && db > bgPeak) bgPeak = db;
+      if (now - bgT0 > 60000) {
+        logEvent("背景偵測運作中（" + Math.round((now - bgT0) / 1000) + " 秒 " + bgFrames + " 幀，"
+          + (micLive ? "峰值 " + bgPeak.toFixed(0) + "dB" : "麥克風離線中") + "）");
+        bgT0 = now; bgFrames = 0; bgPeak = -120;
+      }
+    }
+
     // 診斷統計：每 10 秒彙整一次；期間有明顯聲音卻沒觸發時，寫入事件紀錄供調校。
     // 麥克風離線的幀不列入，避免產生誤導性的統計
     if (!micLive) stat = null;
