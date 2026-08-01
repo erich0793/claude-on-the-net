@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v52</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v53</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -666,6 +666,8 @@
     return _silentUrl;
   }
   function attachAlertHandlers(el) {
+    if (el._handlers) return; // 熱身元素會被重複徵用，處理器只能掛一次
+    el._handlers = true;
     // 池元素的播放狀態也要反映到「試聽／停止播放」按鈕文字上
     el.addEventListener("play", refreshTestBtn);
     el.addEventListener("pause", refreshTestBtn);
@@ -680,22 +682,15 @@
     });
   }
   function clearPool() { elPool = []; }
-  // 無手勢補鑄（盡力而為）：整夜多次觸發時在每次播放結束後補一顆。
-  // 未經手勢解鎖的元素在部分情況會被 iOS 擋播——擋掉時由播放失敗回復機制接手
-  function mintOne() {
-    if (!player.src || elPool.length >= 12) return;
-    const el = new Audio();
-    el.preload = "none";
-    el.src = player.src;
-    el.setAttribute("x-webkit-airplay", "allow");
-    el._real = true;
-    tagEl(el, "補鑄"); el._unlockOK = false; // 無手勢：本來就沒有解鎖
-    elPool.push(el);
-  }
+  // 舊的「無手勢補鑄」已移除：08/01 整夜的紀錄證明補鑄元素被 iOS 以
+  // NotAllowedError 全數擋下（第 13 次觸發之後連續 24 次無一成功），
+  // 它唯一的作用是把池填回滿、讓系統誤以為庫存充足而不走備援路徑。
+  // 沒有使用者手勢就沒有播放權，補鑄毫無意義。
+  const POOL_N = 32; // 一次手勢備妥整夜的量（元素在換源前只是 3KB 無聲檔，成本極低）
   function topUpPool() {
     if (!player.src) return;
     const before = elPool.length;
-    while (elPool.length < 12) { // 一晚可能觸發多次，池要夠深（元素在換源前只是 3KB 無聲檔，成本極低）
+    while (elPool.length < POOL_N) {
       const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
       el.setAttribute("x-webkit-airplay", "allow");
       tagEl(el, "解鎖");
@@ -757,6 +752,12 @@
     }
   }
 
+  // 任何點擊都是使用者手勢：順手把元素池補滿，不必特地重按「開始監聽」。
+  // 監聽中才做，且池滿時 topUpPool 直接空轉，成本為零
+  document.addEventListener("pointerdown", () => {
+    if (running && player.src && elPool.length < POOL_N) { topUpPool(); unlockWarm(); }
+  }, true);
+
   // 註：#player 不再需要預解鎖——警報／手動播放走池元素（以無聲小檔解鎖），
   // #player 只剩「試聽」用途且必由使用者親手觸發。舊的 unlockAudio 靜音播放
   // 在部分 iOS 版本會漏出一瞬音樂，已移除。
@@ -764,6 +765,7 @@
   async function start() {
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
     unlockKeeper(); // 保連音軌兼任解鎖，無論有無勾選保持連線都需解鎖
+    unlockWarm();   // 熱身元素：池用完後的無上限備援
     topUpPool();    // 補滿處女警報元素池（以無聲小檔解鎖）
     keeperOn();
     try {
@@ -962,7 +964,9 @@
   // 連續播放保連音是無效的。改為每 4 分鐘短暫釋放麥克風 3 秒、把保連訊號真正送到音響，
   // 再自動收回麥克風繼續監聽。
   let keeper = null, keepTimer = null, pulsing = false;
+  let _keepUrl = null;
   function keepWavUrl() {
+    if (_keepUrl) return _keepUrl; // 熱身元素與保連音軌共用同一份，且警報後要換回來
     // 極微弱 17.5kHz 正弦波：成人聽不到，且完全在偵測分析頻帶之外（不會自我觸發）；
     // 對音響是「持續有內容」的訊號——純無聲會觸發許多音響的自動關機
     const sr = 44100, n = sr * 10, amp = 1300, f = 17500;
@@ -973,7 +977,8 @@
     b.setUint32(24, sr, true); b.setUint32(28, sr * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
     w8(36, "data"); b.setUint32(40, n * 2, true);
     for (let i = 0; i < n; i++) b.setInt16(44 + i * 2, Math.round(amp * Math.sin(2 * Math.PI * f * i / sr)), true);
-    return URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
+    _keepUrl = URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
+    return _keepUrl;
   }
   function ensureKeeper() {
     if (!keeper) {
@@ -989,6 +994,27 @@
     keeper.muted = true;
     const p = keeper.play();
     if (p) p.then(() => { keeper.pause(); keeper.muted = false; }).catch(() => { keeper.muted = false; });
+  }
+  // —— 熱身元素：與保連音軌同一種元素（同一份 17.5kHz 訊號、人耳聽不到），
+  // 跟著保連脈衝輪流發聲，播放授權因此每隔幾分鐘就被一次「真的成功播放」刷新。
+  // 元素池用完後由它們接手警報，觸發次數不再有上限。
+  // 依據 08/01 的整夜紀錄：保連音軌無手勢播放 145 次全數成功；手勢解鎖過的元素
+  // 放 8 小時仍可播；換 src 不影響播放授權（池元素全是換過 src 的）。
+  let warmEls = [];
+  function unlockWarm() {
+    while (warmEls.length < 3) {
+      const w = new Audio(keepWavUrl());
+      w.setAttribute("x-webkit-airplay", "allow");
+      tagEl(w, "熱身");
+      warmEls.push(w);
+    }
+    warmEls.forEach(w => {
+      if (w._inUse || !w.paused || w._unlockOK) return; // 正在當警報／正在脈衝／已解鎖就別碰
+      w.muted = true;
+      const p = w.play();
+      if (p) p.then(() => { if (!w._inUse) w.pause(); w.muted = false; w._unlockOK = true; })
+             .catch(err => { w.muted = false; w._unlockErr = (err && err.name) || "未知"; });
+    });
   }
   function keeperOn() {
     if (!keepCk.checked) return;
@@ -1007,24 +1033,38 @@
   let pulseN = 0;
   let pulseFails = 0;
   let lastPulseOK = 0; // 最後一次「無手勢播放成功」的時戳
+  // 這一輪由誰發聲：保連音軌與各熱身元素輪流，讓熱身元素的播放授權保持新鮮。
+  // 只有保連音軌本人失敗才計入 pulseFails——熱身元素出問題不得波及保連功能
+  let pulseIdx = 0;
+  function pulseTarget() {
+    const ring = [keeper].concat(warmEls.filter(w => !w._inUse && w.paused && !w._real));
+    pulseIdx = (pulseIdx + 1) % ring.length;
+    return ring[pulseIdx];
+  }
   function keepPulse() {
     if (!running || alerting || recovering || pulsing || resetting) return;
     pulsing = true;
+    const tgt = pulseTarget();
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
     if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
     setTimeout(() => {
       if (!pulsing) return;
-      const p = keeper.play();
+      const p = tgt.play();
       if (p) p.then(() => {
-        pulseN++; pulseFails = 0;
+        pulseN++;
+        if (tgt === keeper) pulseFails = 0;
+        tgt._unlockOK = true; // 剛剛才成功無手勢播放，授權確定新鮮
         // 每次都記：這是「此刻無手勢播放是否還被允許」的唯一時間線參照，
         // 播放被擋時要拿它來比對（脈衝剛成功卻擋掉音樂＝問題出在元素個體）
         lastPulseOK = Date.now();
-        logEvent("保連脈衝 #" + pulseN + " 已送出（" + (document.visibilityState === "visible" ? "前景" : "背景") + "）");
+        logEvent("保連脈衝 #" + pulseN + " 已送出（" + (document.visibilityState === "visible" ? "前景" : "背景")
+          + (tgt === keeper ? "" : "，熱身#" + tgt._id) + "）");
       }).catch(err => {
+        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知")
+          + (tgt === keeper ? "" : "，熱身#" + tgt._id) + "）");
+        if (tgt !== keeper) { tgt._unlockOK = false; return; } // 熱身元素失敗不影響保連功能
         pulseFails++;
-        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "）");
         if (pulseFails >= 2 && keepTimer) { // 連續被擋代表播放授權已失效，別再白白中斷麥克風
           clearInterval(keepTimer); keepTimer = null;
           logEvent("保連脈衝連續被阻擋，已自動暫停此功能");
@@ -1032,7 +1072,7 @@
       });
     }, 800);
     setTimeout(() => {
-      keeper.pause();
+      tgt.pause();
       pulsing = false;
       if (running && !alerting) recoverMic(true);
     }, 5800);
@@ -1078,10 +1118,14 @@
     // 播放結束一律釋放媒體元素的工作階段與本輪淡出引擎（不論是否在監聽中）
     if (was) setTimeout(() => {
       if (!alerting && el.paused && el.src) {
-        try { el.load(); } catch (e) {}
+        if (el._origin === "熱身") {
+          // 換回保連訊號，重回脈衝輪替繼續保持授權新鮮（換 src 不影響授權）
+          el.src = keepWavUrl(); el._real = false; el._inUse = false;
+        } else {
+          try { el.load(); } catch (e) {}
+        }
       }
       if (fc) { try { fc.close(); } catch (e) {} }
-      mintOne(); // 盡力補鑄一顆池元素，整夜多次觸發不耗盡
     }, 500);
     if (running && was) {
       setStatus("listening", "監聽中…", "已回到偵測狀態");
@@ -1115,13 +1159,17 @@
       // 跳過可省下約 2 秒的等待，警報更快出聲
       const wantFade = isManual && mins !== "once" && +fadeEnd.value < 1;
       const endVol = +fadeEnd.value;
-      // FIFO：先用最早的「手勢解鎖」元素，無手勢補鑄的（可能被擋播）留到最後
-      alertEl = elPool.shift() || player;
+      // 取用順序：① 處女池元素（FIFO，路由最乾淨）② 熱身元素（池用完時接手，
+      // 授權剛被脈衝刷新過）③ #player（使用者親手按過才有授權，最後手段）
+      alertEl = elPool.shift() || warmEls.find(w => !w._inUse && w._unlockOK) || warmEls.find(w => !w._inUse) || player;
       const el = alertEl;
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
-      logEvent("🔊 觸發播放（" + (reason || "手動") + (el !== player ? "，新元素#" + el._id + "，池餘 " + elPool.length : "，共用播放器") + "）");
+      logEvent("🔊 觸發播放（" + (reason || "手動")
+        + (el === player ? "，共用播放器"
+           : el._origin === "熱身" ? "，熱身元素#" + el._id
+           : "，新元素#" + el._id + "，池餘 " + elPool.length) + "）");
       if (mins !== "once") {
         el.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
