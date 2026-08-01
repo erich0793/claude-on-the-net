@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v54</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v55</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -280,6 +280,9 @@
   }
   $("clearLogBtn").addEventListener("click", () => { logArr = []; localStorage.removeItem("evlog"); renderLog(); });
   renderLog();
+  // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
+  // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
+  logEvent("📄 頁面載入（v55）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -776,15 +779,23 @@
   // #player 只剩「試聽」用途且必由使用者親手觸發。舊的 unlockAudio 靜音播放
   // 在部分 iOS 版本會漏出一瞬音樂，已移除。
 
+  let starting = false; // 啟動中：擋掉「沒反應再按一次」造成的並行麥克風請求
   async function start() {
+    if (starting || running) return;
+    starting = true;
+    startBtn.disabled = true; // 立刻停用（過去要等 getUserMedia 成功才停，那 3–4 秒是重入破口）
+    setStatus("", "正在開啟麥克風…", "第一次使用會跳出授權詢問，請選「允許」");
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
     unlockKeeper(); // 保連音軌兼任解鎖，無論有無勾選保持連線都需解鎖
     unlockWarm();   // 熱身元素：池用完後的無上限備援
     topUpPool();    // 補滿處女警報元素池（以無聲小檔解鎖）
     keeperOn();
     try {
+      // 先收拾舊的錄音工作階段：變數一旦被覆寫，舊串流就再也沒人 stop()，
+      // 會變成孤兒工作階段死抓著麥克風，讓之後每一次請求都永遠不回來
+      if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} stream = null; }
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
-      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+      stream = await micWithTimeout();
       // 取得權限後才能讀裝置清單：找出內建麥克風並固定使用；
       // 若這次抓到的不是內建（例如藍牙音響的通話麥克風），立刻換成內建
       if (!builtinMicId) {
@@ -792,14 +803,21 @@
         const label = (stream.getAudioTracks()[0] || {}).label || "";
         if (builtinMicId && !/iphone|ipad|built-?in|內建/i.test(label)) {
           stream.getTracks().forEach(t => t.stop());
-          stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+          stream = await micWithTimeout();
         }
       }
       logEvent("麥克風：" + ((stream.getAudioTracks()[0] || {}).label || "未知"));
     } catch (e) {
-      setStatus("alert", "無法開啟麥克風", e.message || "請確認已授權，且在 https/localhost 下開啟");
+      const timedOut = e && e.message === "麥克風逾時";
+      logEvent("⚠️ 無法開啟麥克風（" + (timedOut ? "10 秒無回應" : (e && e.name) || "未知") + "）");
+      setStatus("alert", "無法開啟麥克風",
+        timedOut ? "麥克風沒有回應（多半是前一個分頁還占著）。可直接再按一次；仍不行就把此分頁完全關掉再重開"
+                 : (e && e.message) || "請確認已授權，且在 https/localhost 下開啟");
+      startBtn.disabled = false; // 不必重載頁面就能重試
+      starting = false;
       return;
     }
+    starting = false;
     // 麥克風一律用自己的（可重用的）AudioContext。播放預設走純播放器輸出——
     // 在錄音模式下建立的 Web Audio 引擎，其輸出會被 iOS 釘在手機喇叭，
     // 即使之後關掉麥克風也不會遷移到藍牙／AirPlay；純播放器則會正確路由。
@@ -843,6 +861,17 @@
     if (builtinMicId) c.deviceId = { exact: builtinMicId };
     return { audio: c };
   }
+  // 麥克風請求一律設時限：被殘留的錄音工作階段卡住時，getUserMedia 會永遠不回來
+  //（本專案鐵律：任何 await 都要有時限——AudioContext.resume() 已經咬過一次）。
+  // 遲到的串流要主動關掉，否則又是一個沒人管的工作階段
+  function micWithTimeout(ms) {
+    const req = navigator.mediaDevices.getUserMedia(micConstraints());
+    let late = false;
+    return Promise.race([
+      req.then(s => { if (late) { try { s.getTracks().forEach(t => t.stop()); } catch (e) {} throw new Error("麥克風逾時"); } return s; }),
+      new Promise((_, rej) => setTimeout(() => { late = true; rej(new Error("麥克風逾時")); }, ms || 10000))
+    ]);
+  }
 
   // 深度音訊重置：不重載頁面（重載會丟失使用者手勢的播放授權，之後的播放
   // 會被 iOS 丟進通話級的劣化管線），改為徹底關閉本頁所有音訊資源數秒，
@@ -866,7 +895,7 @@
       analyser.smoothingTimeConstant = 0.6;
       freqData = new Uint8Array(analyser.frequencyBinCount);
       timeData = new Float32Array(analyser.fftSize);
-      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+      stream = await micWithTimeout(); // 卡住的話 resetting 會永遠掛著，整晚失聰
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
       mlBufInit();
@@ -892,7 +921,7 @@
     if (!silent) setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
     try {
       if (!builtinMicId) await findBuiltinMic(); // 首次未鎖定成功時再試一次
-      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+      stream = await micWithTimeout(); // 卡住的話 recovering 會永遠掛著，看門狗再也不會重試
       if (!running) { stream.getTracks().forEach(t => t.stop()); recovering = false; return; } // 等待期間被停止
       if (audioCtx.state !== "running") await audioCtx.resume(); // 喚醒播放期間休眠的引擎
       if (source) source.disconnect();
