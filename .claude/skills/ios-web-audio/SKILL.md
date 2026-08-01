@@ -34,6 +34,12 @@ description: iOS Safari 網頁音訊開發實戰經驗——麥克風＋播放�
 
 ## 三、長時間掛機鐵律
 
+9-2. **`getUserMedia` 會永遠不回來**（前一個錄音工作階段還沒釋放時），不是 reject。
+    必用 `Promise.race` 設時限，遲到的串流要主動 `stop()`；卡在 `recovering`／
+    `resetting` 之類的旗標裡等於整晚失聰。啟動按鈕更要**在 await 之前就停用**——
+    使用者看不到反應會再按一次，第二次呼叫會覆寫 stream 變數，第一條串流從此
+    沒人 `stop()`，變成孤兒工作階段死抓麥克風，下一次載入頁面就再也開不起來。
+
 10. **麥克風軌會被 iOS 無預警收走**（播放前後、來電、Siri、切 App）且不自動恢復。
     → 每 3 秒看門狗檢查 `track.readyState` 與 `ctx.state`，掛了就自動重新 getUserMedia。
     → Safari 網站設定將麥克風設為「允許」，重取用才不會跳詢問視窗。
