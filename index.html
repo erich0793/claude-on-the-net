@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v53</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v54</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -718,7 +718,7 @@
       elPool.forEach(e => { if (e._unlockErr) tally[e._unlockErr] = (tally[e._unlockErr] || 0) + 1; });
       const errs = Object.keys(tally).map(k => k + "×" + tally[k]);
       logEvent("元素池已備妥：解鎖 " + ok + "/" + elPool.length + (errs.length ? "（失敗：" + errs.join("、") + "）" : ""));
-    }, 1500);
+    }, 4000); // 32 顆的解鎖要幾秒才全部落地，太早統計會誤報成失敗
   }
 
   // —— 每輪播放專屬的淡出引擎：全新 AudioContext 捕捉全新池元素（皆無歷史、
@@ -750,6 +750,20 @@
       fadeCtx = null; fadeGain = null;
       return false;
     }
+  }
+
+  // 音訊裝置變更：藍牙音響連上／斷線時多半會觸發（它的通話麥克風會進出裝置清單），
+  // 用來替「音響什麼時候掉的」蓋一個時間戳，才能跟保連脈衝的時間線對照
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener("devicechange", () => {
+      if (!running) return;
+      navigator.mediaDevices.enumerateDevices().then(ds => {
+        const name = d => d.label || "未命名";
+        const outs = ds.filter(d => d.kind === "audiooutput").map(name);
+        const ins = ds.filter(d => d.kind === "audioinput").map(name);
+        logEvent("🔌 音訊裝置變更：輸出[" + (outs.join("、") || "未提供") + "]｜輸入[" + (ins.join("、") || "未提供") + "]");
+      }).catch(() => {});
+    });
   }
 
   // 任何點擊都是使用者手勢：順手把元素池補滿，不必特地重按「開始監聽」。
@@ -1033,38 +1047,42 @@
   let pulseN = 0;
   let pulseFails = 0;
   let lastPulseOK = 0; // 最後一次「無手勢播放成功」的時戳
-  // 這一輪由誰發聲：保連音軌與各熱身元素輪流，讓熱身元素的播放授權保持新鮮。
-  // 只有保連音軌本人失敗才計入 pulseFails——熱身元素出問題不得波及保連功能
+  // 熱身元素搭便車，不取代保連音軌：v53 曾讓兩者「輪流」發聲，結果保連音軌
+  // 從每 4 分鐘變成每 16 分鐘才真正送一次訊號到音響（熱身元素的 17.5kHz 是否
+  // 真的走到藍牙無從驗證），當晚音響就斷線了。保連音軌每次都必須照常發送。
   let pulseIdx = 0;
-  function pulseTarget() {
-    const ring = [keeper].concat(warmEls.filter(w => !w._inUse && w.paused && !w._real));
+  function warmRider() {
+    const ring = warmEls.filter(w => !w._inUse && w.paused && !w._real);
+    if (!ring.length) return null;
     pulseIdx = (pulseIdx + 1) % ring.length;
     return ring[pulseIdx];
   }
   function keepPulse() {
     if (!running || alerting || recovering || pulsing || resetting) return;
     pulsing = true;
-    const tgt = pulseTarget();
+    const rider = warmRider(); // 與保連音軌同時播放，順便刷新它的播放授權
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
     if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
     setTimeout(() => {
       if (!pulsing) return;
-      const p = tgt.play();
+      if (rider) {
+        rider.currentTime = 0;
+        const rp = rider.play();
+        if (rp) rp.then(() => { rider._unlockOK = true; })
+                  .catch(err => { rider._unlockOK = false; logEvent("⚠️ 熱身#" + rider._id + " 刷新被擋（" + ((err && err.name) || "未知") + "）"); });
+      }
+      const p = keeper.play();
       if (p) p.then(() => {
-        pulseN++;
-        if (tgt === keeper) pulseFails = 0;
-        tgt._unlockOK = true; // 剛剛才成功無手勢播放，授權確定新鮮
+        pulseN++; pulseFails = 0;
         // 每次都記：這是「此刻無手勢播放是否還被允許」的唯一時間線參照，
         // 播放被擋時要拿它來比對（脈衝剛成功卻擋掉音樂＝問題出在元素個體）
         lastPulseOK = Date.now();
         logEvent("保連脈衝 #" + pulseN + " 已送出（" + (document.visibilityState === "visible" ? "前景" : "背景")
-          + (tgt === keeper ? "" : "，熱身#" + tgt._id) + "）");
+          + (rider ? "，順帶熱身#" + rider._id : "") + "）");
       }).catch(err => {
-        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知")
-          + (tgt === keeper ? "" : "，熱身#" + tgt._id) + "）");
-        if (tgt !== keeper) { tgt._unlockOK = false; return; } // 熱身元素失敗不影響保連功能
         pulseFails++;
+        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "）");
         if (pulseFails >= 2 && keepTimer) { // 連續被擋代表播放授權已失效，別再白白中斷麥克風
           clearInterval(keepTimer); keepTimer = null;
           logEvent("保連脈衝連續被阻擋，已自動暫停此功能");
@@ -1072,7 +1090,8 @@
       });
     }, 800);
     setTimeout(() => {
-      tgt.pause();
+      if (rider) rider.pause();
+      keeper.pause();
       pulsing = false;
       if (running && !alerting) recoverMic(true);
     }, 5800);
