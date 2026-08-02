@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v55</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v56</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -282,7 +282,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v55）");
+  logEvent("📄 頁面載入（v56）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -445,6 +445,9 @@
     trimBox.style.display = "block";
     origSize.textContent = fmtSize(blob.size);
     origDur.textContent = "讀取中…";
+    // 記錄檔案大小：整晚循環播放一個過大的音檔是記憶體壓力的來源之一，
+    // 頁面不穩時要先看得到這個數字（瀏覽器內剪輯輸出的是未壓縮 WAV，很容易變大）
+    logEvent("🎵 音檔：" + name + "（" + fmtSize(blob.size) + "）");
   }
 
   // --- 音檔載入 ---
@@ -689,7 +692,11 @@
   // NotAllowedError 全數擋下（第 13 次觸發之後連續 24 次無一成功），
   // 它唯一的作用是把池填回滿、讓系統誤以為庫存充足而不走備援路徑。
   // 沒有使用者手勢就沒有播放權，補鑄毫無意義。
-  const POOL_N = 32; // 一次手勢備妥整夜的量（元素在換源前只是 3KB 無聲檔，成本極低）
+  // 池深度：曾在 v53 拉到 32，但一次手勢內同時 play() 三十幾顆元素，等於同時要求
+  // iOS 配置三十幾組媒體資源，與 YAMNet 載入撞在一起造成啟動不穩／當頁。
+  // 現在「無上限」已由熱身元素負責，池只要夠應付一晚前幾次觸發即可——
+  // 回到長期穩定的 12。
+  const POOL_N = 12;
   function topUpPool() {
     if (!player.src) return;
     const before = elPool.length;
@@ -772,7 +779,9 @@
   // 任何點擊都是使用者手勢：順手把元素池補滿，不必特地重按「開始監聽」。
   // 監聽中才做，且池滿時 topUpPool 直接空轉，成本為零
   document.addEventListener("pointerdown", () => {
-    if (running && player.src && elPool.length < POOL_N) { topUpPool(); unlockWarm(); }
+    // 只在真的快見底時才補（過去只要少一顆就補，等於每次碰畫面都來一次
+    // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿
+    if (running && player.src && elPool.length <= 4) { topUpPool(); unlockWarm(); }
   }, true);
 
   // 註：#player 不再需要預解鎖——警報／手動播放走池元素（以無聲小檔解鎖），
