@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v59</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v60</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -203,6 +203,7 @@
       <select id="playDur" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="once">播完一次就停</option>
         <option value="1">循環 1 分鐘</option>
+        <option value="3">循環 3 分鐘</option>
         <option value="5">循環 5 分鐘</option>
         <option value="10">循環 10 分鐘</option>
         <option value="30">循環 30 分鐘</option>
@@ -288,7 +289,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v59）");
+  logEvent("📄 頁面載入（v60）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
