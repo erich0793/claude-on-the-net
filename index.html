@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v63</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v64</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -314,7 +314,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v63）");
+  logEvent("📄 頁面載入（v64）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -1017,9 +1017,20 @@
   async function requestWake() {
     try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { /* 不支援時略過 */ }
   }
+  // 迴圈換軌：rAF 在頁面隱藏的當下就被凍結，「還在等待的那一次 rAF 回呼」
+  // 永遠不會執行——迴圈自己沒有機會跑到切換計時器的那行程式。必須由
+  // visibilitychange 主動把它踢起來，否則背景偵測（連同迴圈內的看門狗）
+  // 整段是停擺的：實測整晚背景期間一行「背景偵測運作中」心跳都沒有。
+  function kickLoop() {
+    if (!running) return;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
+    loop(); // 由 loop 依當下前景／背景自行決定下一次的排程方式
+  }
   document.addEventListener("visibilitychange", () => {
     if (running && document.visibilityState === "hidden") {
       logEvent("進入背景：偵測改由計時器驅動（每分鐘的「背景偵測運作中」心跳可驗證）");
+      kickLoop();
     }
     if (running && document.visibilityState === "visible") {
       logEvent("回到前景");
@@ -1027,6 +1038,7 @@
       if (audioCtx && audioCtx.state !== "running" && !alerting) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
+      kickLoop();
     }
   });
 
@@ -1151,8 +1163,18 @@
     pulseIdx = (pulseIdx + 1) % ring.length;
     return ring[pulseIdx];
   }
+  let pulseSkipped = false;
   function keepPulse() {
     if (!running || alerting || recovering || pulsing || resetting) return;
+    // 背景時絕不放掉麥克風：iOS 不讓背景頁面重新取得麥克風，脈衝一釋放就要
+    // 等到你回到前景才拿得回來（實測空窗 15～42 秒，甚至逾時失敗）。
+    // 音響閒置斷線是可以忍的，整段聽不見寶寶不行。
+    if (document.visibilityState !== "visible") {
+      if (!pulseSkipped) logEvent("保連脈衝暫停（頁面在背景，此時放掉麥克風會拿不回來）");
+      pulseSkipped = true;
+      return;
+    }
+    if (pulseSkipped) { logEvent("已回到前景，保連脈衝恢復"); pulseSkipped = false; }
     pulsing = true;
     const rider = warmRider(); // 與保連音軌同時播放，順便刷新它的播放授權
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
