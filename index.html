@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v57</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v58</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -282,7 +282,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v57）");
+  logEvent("📄 頁面載入（v58）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -1199,6 +1199,9 @@
       else deepAudioReset();        // 自然結束：深度音訊重置歸位路由，再恢復監聽
     } else if (was) {
       logEvent("播放結束（未在監聽中）");
+      // 未監聽時播完要把狀態列收回來，否則會一直停在「播放中…」，
+      // 讓人以為還在播（手動播放結束後最常看到這一幕）
+      setStatus("", "播放結束", "尚未開始偵測——要讓它自動守著，請按「開啟麥克風並開始監聽」");
     }
   }
   player.addEventListener("ended", () => { if (alerting && curEl() === player) stopAlert(); });
