@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v62</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v63</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -129,6 +129,10 @@
       <button id="testBtn" disabled>▶️ 試聽音檔</button>
       <button id="manualBtn" disabled title="依下方「播放」設定的時長與結束音量播放，不需偵測">🎵 手動播放</button>
     </div>
+    <label class="hint" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-top:10px">
+      <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent); flex:none; margin-top:1px">
+      <span><b style="color:var(--text)">🎵→🎙️ 手動播放結束後自動開始偵測</b><br>音樂播完或按停止後，自動開麥克風接手站崗，不必再按「開始監聽」</span>
+    </label>
     <details style="margin-top:10px">
       <summary>⋯ 更多音檔選項（下載、清除、播放器）</summary>
       <div class="row" style="margin-top:10px">
@@ -139,10 +143,6 @@
       </div>
       <audio id="player" controls preload="auto" x-webkit-airplay="allow" style="display:none"></audio>
     </details>
-    <label class="hint" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-top:10px">
-      <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent); flex:none; margin-top:1px">
-      <span><b style="color:var(--text)">🎵→🎙️ 手動播放結束後自動開始偵測</b><br>音樂播完或按停止後，自動開麥克風接手站崗，不必再按「開始監聽」</span>
-    </label>
     <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
     <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
 
@@ -314,7 +314,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v62）");
+  logEvent("📄 頁面載入（v63）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
