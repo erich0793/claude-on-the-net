@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v56</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v57</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -282,7 +282,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v56）");
+  logEvent("📄 頁面載入（v57）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -598,6 +598,14 @@
   }
   sens.addEventListener("input", refreshLabels);
   dur.addEventListener("input", refreshLabels);
+  // 沿用上次在這台裝置調好的值：這兩項是每晚實際在用的偵測參數，
+  // 每次開頁面被重置回預設，等於每天都要重調一次
+  //（存在 change：拖曳中的 input 會連發，不必每個像素都寫一次）
+  const savedSens = localStorage.getItem("sens"), savedDur = localStorage.getItem("dur");
+  if (savedSens !== null) sens.value = savedSens;
+  if (savedDur !== null) dur.value = savedDur;
+  sens.addEventListener("change", () => localStorage.setItem("sens", sens.value));
+  dur.addEventListener("change", () => localStorage.setItem("dur", dur.value));
   refreshLabels();
 
   // 自相關法估測基頻（F0）與週期性。嬰兒哭聲 F0 約 250–700Hz（尖叫可達 1000+），
