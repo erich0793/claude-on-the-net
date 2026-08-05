@@ -90,14 +90,32 @@
   .sect { font-size: 12px; color: var(--muted); letter-spacing: 2px; margin: 18px 0 6px; }
   details { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
   summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+  /* 監聽中固定在畫面頂端的狀態條：整頁很長，最重要的「現在到底在不在監聽」
+     不該讓人捲半天才看得到 */
+  #miniBar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: none;
+    align-items: center; gap: 10px; padding: 10px 16px;
+    background: rgba(23,28,36,.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600;
+  }
+  #miniBar.on { display: flex; }
+  #miniBar .mtxt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #miniBar .mval { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; flex: none; }
+  body.barred .wrap { padding-top: 56px; }
 </style>
+
+<div id="miniBar">
+  <span class="dot" id="miniDot"></span>
+  <span class="mtxt" id="miniTxt">監聽中…</span>
+  <span class="mval" id="miniVal">–</span>
+</div>
 
 <div class="wrap">
   <div class="topbar">
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v61</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v62</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -110,20 +128,27 @@
     <div class="row" style="margin-top:10px">
       <button id="testBtn" disabled>▶️ 試聽音檔</button>
       <button id="manualBtn" disabled title="依下方「播放」設定的時長與結束音量播放，不需偵測">🎵 手動播放</button>
-      <button id="dlBtn" style="display:none">⬇️ 下載目前音檔</button>
-      <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
-      <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
-      <input type="file" id="anyFileInput" style="display:none" />
     </div>
+    <details style="margin-top:10px">
+      <summary>⋯ 更多音檔選項（下載、清除、播放器）</summary>
+      <div class="row" style="margin-top:10px">
+        <button id="dlBtn" style="display:none">⬇️ 下載目前音檔</button>
+        <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
+        <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
+        <input type="file" id="anyFileInput" style="display:none" />
+      </div>
+      <audio id="player" controls preload="auto" x-webkit-airplay="allow" style="display:none"></audio>
+    </details>
     <label class="hint" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-top:10px">
       <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent); flex:none; margin-top:1px">
-      <span>🎵→🎙️ <b style="color:var(--text)">手動播放結束後自動開始偵測</b>：哄睡的音樂播完（或你按停止播放）之後，自動開啟麥克風接手站崗，不必再按一次「開始監聽」</span>
+      <span><b style="color:var(--text)">🎵→🎙️ 手動播放結束後自動開始偵測</b><br>音樂播完或按停止後，自動開麥克風接手站崗，不必再按「開始監聽」</span>
     </label>
     <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
     <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
 
-    <div id="trimBox" style="display:none; margin-top:14px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--panel-2)">
-      <div style="font-size:14px; font-weight:600; margin-bottom:10px">✂️ 剪短音檔（在你的裝置上處理，不會上傳）</div>
+    <details id="trimBox" style="display:none; margin-top:14px">
+      <summary>✂️ 剪短音檔（在你的裝置上處理，不會上傳）</summary>
+      <div style="height:10px"></div>
       <div class="kv" style="margin:0 0 10px">
         <span>目前音檔長度 <b id="origDur">讀取中…</b></span>
         <span>大小 <b id="origSize">–</b></span>
@@ -137,8 +162,7 @@
         <button class="primary" id="trimBtn">✂️ 剪短並儲存</button>
         <span class="hint" id="trimStatus"></span>
       </div>
-    </div>
-    <audio id="player" controls preload="auto" x-webkit-airplay="allow" style="display:none"></audio>
+    </details>
   </div>
 
   <div class="card">
@@ -181,10 +205,11 @@
     <div class="stept"><span class="stepn">3</span>設定（預設值可直接用，之後再微調）</div>
     <div class="sect">偵 測</div>
     <div class="ctl">
-      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+      <label style="display:flex; align-items:center; justify-content:flex-start; gap:8px; cursor:pointer">
         <input type="checkbox" id="mlCk" style="accent-color:var(--accent)" checked>
-        <span>🧠 AI 聲音分類（YAMNet）：以機器學習模型辨識嬰兒哭聲／哀叫並排除大人講話與環境噪音，大幅減少誤判（建議開啟；模型約 4MB，首次載入後會快取）</span>
+        <span><b>🧠 AI 聲音分類</b>（建議開啟）</span>
       </label>
+      <div class="hint" style="margin-top:4px; padding-left:26px">辨識嬰兒哭聲／哀叫、排除大人講話與環境噪音，大幅減少誤判。模型約 4MB，首次載入後會快取。</div>
     </div>
     <div class="ctl" style="margin-top:14px">
       <label><span>觸發條件</span></label>
@@ -215,7 +240,8 @@
       </select>
     </div>
     <div class="ctl" style="margin-top:14px">
-      <label><span>結束時音量（循環播放期間逐漸變小，哄睡淡出；僅作用於手動播放——偵測觸發的警報因 iOS 限制一律全音量播放）</span></label>
+      <label><span>結束時音量（哄睡淡出）</span></label>
+      <div class="hint" style="margin:-2px 0 6px">循環播放期間音量逐漸變小。僅作用於<b style="color:var(--text)">手動播放</b>——偵測觸發的警報因 iOS 限制一律全音量。</div>
       <select id="fadeEnd" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="1">不變（全程同音量）</option>
         <option value="0.75">結束時為 75%</option>
@@ -226,10 +252,11 @@
     </div>
     <div class="sect">音響 / 連線</div>
     <div class="ctl">
-      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+      <label style="display:flex; align-items:center; justify-content:flex-start; gap:8px; cursor:pointer">
         <input type="checkbox" id="keepCk" style="accent-color:var(--accent)">
-        <span>🔗 保持音響連線：每 4 分鐘向音響發送 5 秒聽不見的保連訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機</span>
+        <span><b>🔗 保持音響連線</b>（接音響時建議開啟）</span>
       </label>
+      <div class="hint" style="margin-top:4px; padding-left:26px">每 4 分鐘向音響發送 5 秒聽不見的訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機。</div>
     </div>
     <details style="margin-top:16px">
       <summary>🧠 偵測原理</summary>
@@ -241,7 +268,7 @@
 
   <div class="card">
     <div style="font-size:14px; font-weight:600; margin-bottom:8px">📋 事件紀錄（存在本機，重開網頁仍在）</div>
-    <div id="logBox" style="font-family:ui-monospace,SFMono-Regular,monospace; font-size:12px; color:var(--muted); max-height:200px; overflow-y:auto; line-height:1.9"></div>
+    <div id="logBox" style="font-family:ui-monospace,SFMono-Regular,monospace; font-size:12px; color:var(--muted); max-height:200px; overflow-y:auto; line-height:1.9; word-break:break-word"></div>
     <div class="row" style="margin-top:10px"><button id="clearLogBtn" style="font-size:12px; padding:6px 12px">清除紀錄</button></div>
   </div>
 
@@ -287,7 +314,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v61）");
+  logEvent("📄 頁面載入（v62）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -654,10 +681,19 @@
     return 22 - (+sens.value / 100) * 17;
   }
 
+  const miniBar = $("miniBar"), miniDot = $("miniDot"), miniTxt = $("miniTxt"), miniVal = $("miniVal");
+  miniBar.addEventListener("click", () => dot.scrollIntoView({ behavior: "smooth", block: "center" })); // 點頂端狀態條可跳回狀態卡片
   function setStatus(state, main, sub) {
     dot.className = "dot" + (state ? " " + state : "");
     statusText.firstChild.textContent = main;
     statusSub.textContent = sub || "";
+    // 同步到頂端狀態條：頁面很長，捲到下面時仍要看得到現在的狀態
+    miniDot.className = "dot" + (state ? " " + state : "");
+    miniTxt.textContent = main;
+    const show = running || alerting;
+    miniBar.classList.toggle("on", show);
+    document.body.classList.toggle("barred", show);
+    if (!show) miniVal.textContent = "–";
   }
 
   startBtn.addEventListener("click", start);
@@ -1452,6 +1488,7 @@
     const volPct = Math.max(0, Math.min(100, (db + 70) / 70 * 100));
     volBar.style.width = volPct.toFixed(0) + "%";
     volVal.textContent = db.toFixed(0) + " dB";
+    if (miniBar.classList.contains("on")) miniVal.textContent = alerting ? "播放中" : db.toFixed(0) + " dB";
     const scorePct = Math.min(100, cryMs / +dur.value * 100);
     scoreBar.style.width = scorePct.toFixed(0) + "%";
     scoreVal.textContent = scorePct.toFixed(0) + "%";
