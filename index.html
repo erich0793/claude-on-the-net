@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v60</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v61</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -115,6 +115,10 @@
       <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
       <input type="file" id="anyFileInput" style="display:none" />
     </div>
+    <label class="hint" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-top:10px">
+      <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent); flex:none; margin-top:1px">
+      <span>🎵→🎙️ <b style="color:var(--text)">手動播放結束後自動開始偵測</b>：哄睡的音樂播完（或你按停止播放）之後，自動開啟麥克風接手站崗，不必再按一次「開始監聽」</span>
+    </label>
     <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
     <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
 
@@ -220,12 +224,6 @@
         <option value="0">淡出到無聲</option>
       </select>
     </div>
-    <div class="ctl" style="margin-top:14px">
-      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
-        <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent)">
-        <span>🎵→🎙️ 手動播放結束後自動開始偵測：哄睡的音樂播完（或你按停止播放）之後，自動開啟麥克風接手站崗，不必再按一次「開始監聽」</span>
-      </label>
-    </div>
     <div class="sect">音響 / 連線</div>
     <div class="ctl">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
@@ -289,7 +287,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v60）");
+  logEvent("📄 頁面載入（v61）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -380,6 +378,13 @@
   manualBtn.addEventListener("click", () => {
     topUpPool(); // 趁手勢補滿警報元素池
     if (player.src && !alerting) trigger("手動播放");
+  });
+  // 手動播放結束後自動接手站崗（預設關閉：自動開麥克風應由使用者明確授權）
+  const autoWatchCk = $("autoWatchCk");
+  autoWatchCk.checked = localStorage.getItem("autowatch") === "1";
+  autoWatchCk.addEventListener("change", () => {
+    localStorage.setItem("autowatch", autoWatchCk.checked ? "1" : "0");
+    logEvent(autoWatchCk.checked ? "已開啟「手動播放結束後自動開始偵測」" : "已關閉「手動播放結束後自動開始偵測」");
   });
   dlBtn.addEventListener("click", () => {
     if (!currentBlob) return;
@@ -1014,14 +1019,6 @@
   playDur.value = localStorage.getItem("playDur") || "once";
   if (playDur.selectedIndex < 0) playDur.value = "once";
   playDur.addEventListener("change", () => localStorage.setItem("playDur", playDur.value));
-
-  // 手動播放結束後自動接手站崗（預設關閉：自動開麥克風應由使用者明確授權）
-  const autoWatchCk = $("autoWatchCk");
-  autoWatchCk.checked = localStorage.getItem("autowatch") === "1";
-  autoWatchCk.addEventListener("change", () => {
-    localStorage.setItem("autowatch", autoWatchCk.checked ? "1" : "0");
-    logEvent(autoWatchCk.checked ? "已開啟「手動播放結束後自動開始偵測」" : "已關閉「手動播放結束後自動開始偵測」");
-  });
 
   const fadeEnd = $("fadeEnd");
   fadeEnd.value = localStorage.getItem("fadeEnd") || "1";
