@@ -97,7 +97,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v58</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v59</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -219,6 +219,12 @@
         <option value="0">淡出到無聲</option>
       </select>
     </div>
+    <div class="ctl" style="margin-top:14px">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent)">
+        <span>🎵→🎙️ 手動播放結束後自動開始偵測：哄睡的音樂播完（或你按停止播放）之後，自動開啟麥克風接手站崗，不必再按一次「開始監聽」</span>
+      </label>
+    </div>
     <div class="sect">音響 / 連線</div>
     <div class="ctl">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
@@ -282,7 +288,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v58）");
+  logEvent("📄 頁面載入（v59）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -1008,6 +1014,14 @@
   if (playDur.selectedIndex < 0) playDur.value = "once";
   playDur.addEventListener("change", () => localStorage.setItem("playDur", playDur.value));
 
+  // 手動播放結束後自動接手站崗（預設關閉：自動開麥克風應由使用者明確授權）
+  const autoWatchCk = $("autoWatchCk");
+  autoWatchCk.checked = localStorage.getItem("autowatch") === "1";
+  autoWatchCk.addEventListener("change", () => {
+    localStorage.setItem("autowatch", autoWatchCk.checked ? "1" : "0");
+    logEvent(autoWatchCk.checked ? "已開啟「手動播放結束後自動開始偵測」" : "已關閉「手動播放結束後自動開始偵測」");
+  });
+
   const fadeEnd = $("fadeEnd");
   fadeEnd.value = localStorage.getItem("fadeEnd") || "1";
   if (fadeEnd.selectedIndex < 0) fadeEnd.value = "1";
@@ -1158,6 +1172,7 @@
   let micCtx = null;
 
   let alertTimer = null;
+  let lastAlertManual = false; // 這一輪播放是不是「手動播放」（決定播完要不要自動接手站崗）
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
   let calUntil = 0;      // 開始監聽後的校準期：快速學習背景噪音，期間不觸發
 
@@ -1201,7 +1216,16 @@
       logEvent("播放結束（未在監聽中）");
       // 未監聽時播完要把狀態列收回來，否則會一直停在「播放中…」，
       // 讓人以為還在播（手動播放結束後最常看到這一幕）
-      setStatus("", "播放結束", "尚未開始偵測——要讓它自動守著，請按「開啟麥克風並開始監聽」");
+      if (lastAlertManual && autoWatchCk.checked) {
+        // 哄睡音樂播完（或被按停）就自動接手站崗。元素池在按下手動播放時已於
+        // 手勢內補滿，麥克風權限也已是「允許」，所以這裡不需要新的手勢；
+        // 萬一 iOS 仍拒絕，start() 內建的逾時會把按鈕交還給使用者
+        logEvent("手動播放結束，依設定自動開始偵測");
+        setStatus("", "播放結束", "依設定自動開始偵測…");
+        setTimeout(() => { if (!running) start(); }, 1500); // 等元素釋放與音訊工作階段落定
+      } else {
+        setStatus("", "播放結束", "尚未開始偵測——要讓它自動守著，請按「開啟麥克風並開始監聽」");
+      }
     }
   }
   player.addEventListener("ended", () => { if (alerting && curEl() === player) stopAlert(); });
@@ -1221,6 +1245,7 @@
     if (player.src) {
       const mins = playDur.value;
       const isManual = reason === "手動播放";
+      lastAlertManual = isManual; // 播完後要判斷該不該自動接手站崗
       const head = isManual ? "手動播放" : "偵測到哭聲！";
       // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽。
       // 淡出僅手動播放嘗試：警報無手勢、淡出引擎必被 iOS 拒絕（實測 100%），
