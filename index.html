@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v64</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v65</span></div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -127,7 +127,22 @@
     </div>
     <div class="row" style="margin-top:10px">
       <button id="testBtn" disabled>▶️ 試聽音檔</button>
-      <button id="manualBtn" disabled title="依下方「播放」設定的時長與結束音量播放，不需偵測">🎵 手動播放</button>
+      <button id="manualBtn" disabled title="按下後選擇這次要播多久；不需偵測">🎵 手動播放</button>
+    </div>
+    <div id="manualMenu" style="display:none; margin-top:10px; padding:12px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2)">
+      <div class="hint" style="margin-bottom:8px; color:var(--text)">這次要播多久？<span class="muted">（偵測觸發的時長另外設定，不受影響）</span></div>
+      <div class="row" id="manualOpts">
+        <button data-m="once">播完一次</button>
+        <button data-m="1">1 分鐘</button>
+        <button data-m="3">3 分鐘</button>
+        <button data-m="5">5 分鐘</button>
+        <button data-m="10">10 分鐘</button>
+        <button data-m="30">30 分鐘</button>
+        <button data-m="60">60 分鐘</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="manualCancel" style="font-size:12px; padding:6px 12px">取消</button>
+      </div>
     </div>
     <label class="hint" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-top:10px">
       <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent); flex:none; margin-top:1px">
@@ -228,7 +243,8 @@
     </div>
     <div class="sect">播 放</div>
     <div class="ctl">
-      <label><span>觸發後播放時長（音檔較短會自動循環）</span></label>
+      <label><span>偵測觸發後播放時長（音檔較短會自動循環）</span></label>
+      <div class="hint" style="margin:-2px 0 6px">只作用於<b style="color:var(--text)">偵測到哭聲</b>的自動播放。「🎵 手動播放」按下時會另外問你這次要播多久。</div>
       <select id="playDur" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
         <option value="once">播完一次就停</option>
         <option value="1">循環 1 分鐘</option>
@@ -314,7 +330,7 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v64）");
+  logEvent("📄 頁面載入（v65）");
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
@@ -402,10 +418,32 @@
 
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn"), manualBtn = $("manualBtn");
   // 手動播放：不經偵測，沿用「播放」設定的時長與淡出；播放機制與警報共用
+  // 按下手動播放先問「這次要播多久」：哄睡與半夜警報想要的長度通常不同。
+  // 選單的按鈕本身就是一次使用者手勢，播放授權不會斷，元素池也在那時才補
+  const manualMenu = $("manualMenu"), manualOpts = $("manualOpts");
+  function showManualMenu(show) {
+    manualMenu.style.display = show ? "block" : "none";
+    if (show) {
+      const last = localStorage.getItem("manualDur") || playDur.value;
+      [...manualOpts.children].forEach(b => {
+        const on = b.dataset.m === last;
+        b.className = on ? "primary" : "";     // 標出上次選的，連按兩下就能重播同樣長度
+      });
+    }
+  }
   manualBtn.addEventListener("click", () => {
-    topUpPool(); // 趁手勢補滿警報元素池
-    if (player.src && !alerting) trigger("手動播放");
+    if (!player.src || alerting) return;
+    showManualMenu(manualMenu.style.display === "none");
   });
+  manualOpts.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    const mins = b.dataset.m;
+    localStorage.setItem("manualDur", mins);
+    showManualMenu(false);
+    topUpPool(); // 趁這次手勢補滿警報元素池
+    if (player.src && !alerting) trigger("手動播放", mins);
+  });
+  $("manualCancel").addEventListener("click", () => showManualMenu(false));
   // 手動播放結束後自動接手站崗（預設關閉：自動開麥克風應由使用者明確授權）
   const autoWatchCk = $("autoWatchCk");
   autoWatchCk.checked = localStorage.getItem("autowatch") === "1";
@@ -1295,11 +1333,12 @@
     }
   });
 
-  function trigger(reason) {
+  // minsOverride：手動播放時由選單當場指定；偵測觸發則沿用「觸發後播放時長」設定
+  function trigger(reason, minsOverride) {
     if (alerting) return;
     alerting = true; cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
     if (player.src) {
-      const mins = playDur.value;
+      const mins = minsOverride || playDur.value;
       const isManual = reason === "手動播放";
       lastAlertManual = isManual; // 播完後要判斷該不該自動接手站崗
       const head = isManual ? "手動播放" : "偵測到哭聲！";
