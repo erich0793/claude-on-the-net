@@ -115,7 +115,10 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px">v65</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v66</span></div>
+  <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
+    🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
+  </div>
 
   <div class="card">
     <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
@@ -330,7 +333,32 @@
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
-  logEvent("📄 頁面載入（v65）");
+  const APP_VER = $("verTag").textContent.trim(); // 版本號只寫在畫面上那一處，其他都引用它
+  logEvent("📄 頁面載入（" + APP_VER + "）");
+
+  // 檢查有沒有新版：GitHub Pages 的 HTML 快取 10 分鐘、iOS Safari 又特別頑固，
+  // 常常改好了卻還在看舊版。這裡主動比對版本號，有新版就顯示橫幅——
+  // 但絕不自動重載（重載會沒收使用者手勢的播放授權，監聽中重載更是致命）
+  function checkUpdate() {
+    fetch(location.pathname + "?cb=" + Date.now(), { cache: "no-store" })
+      .then(r => r.ok ? r.text() : Promise.reject())
+      .then(t => {
+        const m = t.match(/id="verTag"[^>]*>\s*(v\d+)/);
+        if (!m || m[1] === APP_VER) return;
+        $("updVer").textContent = m[1];
+        $("updNote").textContent = running
+          ? "（目前正在監聽，更新會重新開始——建議等寶寶醒著時再更新）"
+          : "（目前是 " + APP_VER + "）";
+        $("updBar").style.display = "block";
+      })
+      .catch(() => {});
+  }
+  $("updBar").addEventListener("click", () => {
+    // 帶上版本查詢字串，確保這次一定拿到新的 HTML 而不是快取
+    location.replace(location.pathname + "?v=" + ($("updVer").textContent || Date.now()));
+  });
+  setTimeout(checkUpdate, 5000);        // 載入後先查一次
+  setInterval(checkUpdate, 1800000);    // 之後每 30 分鐘查一次
 
   // ===== AI 聲音分類（YAMNet，TFLite WASM，全部同源自架、離線可用）=====
   const mlCk = $("mlCk"), mlVal = $("mlVal");
