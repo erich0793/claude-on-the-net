@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v67</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v68</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -161,6 +161,7 @@
       </div>
       <audio id="player" controls preload="auto" x-webkit-airplay="allow" style="display:none"></audio>
     </details>
+    <div class="hint" id="bigHint" style="display:none; margin-top:8px; color:var(--warn)">⚠️ 這個音檔偏大，長時間掛機時系統較容易回收它的資源（發生時會自動重建，但仍建議精簡）。用下方「✂️ 剪短音檔」取 60～120 秒並勾選「轉單聲道」即可大幅縮小。</div>
     <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
     <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
 
@@ -176,6 +177,7 @@
         <input type="number" id="trimLen" value="60" min="1" max="300" style="width:70px; font:inherit; padding:6px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text)"> 秒
         <label style="font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px"><input type="checkbox" id="trimMono" checked> 轉單聲道（檔案減半）</label>
       </div>
+      <div class="hint" id="trimEst" style="margin-top:8px">剪出來大約 <b style="color:var(--text)">–</b>（輸出為未壓縮 WAV；越小越不容易被系統回收）</div>
       <div class="row" style="margin-top:10px">
         <button class="primary" id="trimBtn">✂️ 剪短並儲存</button>
         <span class="hint" id="trimStatus"></span>
@@ -302,7 +304,7 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const startBtn = $("startBtn"), stopBtn = $("stopBtn"), testBtn = $("testBtn");
-  const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player");
+  const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player"), bigHint = $("bigHint");
   const dot = $("dot"), statusText = $("statusText"), statusSub = $("statusSub");
   const volBar = $("volBar"), scoreBar = $("scoreBar"), volVal = $("volVal"), scoreVal = $("scoreVal");
   const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal"), f0Val = $("f0Val"), burstVal = $("burstVal");
@@ -514,6 +516,37 @@
       if (rec && rec.blob) useAudio(rec.blob, rec.name, true);
     } catch (e) { /* 無儲存或不支援時安靜略過 */ }
   }
+  // iOS 會在長壽頁面上作廢 blob: 網址（記憶體壓力回收 Blob 的後備儲存），
+  // 之後所有指向它的元素一律 NotSupportedError——實測開機約 10 小時後發生，
+  // 而重開頁面（＝拿到新網址）立刻恢復正常。這裡改成「不重開頁面也能重建來源」：
+  // 從 IndexedDB 重新讀出 Blob、換上新網址，並同步更新所有已解鎖的元素
+  //（換 src 不影響解鎖狀態，先前已實測確認）。
+  let refreshing = null, lastSrcRefresh = 0;
+  function refreshAudioSrc() {
+    if (refreshing) return refreshing;          // 同時多處觸發只做一次
+    refreshing = (async () => {
+      try {
+        const db = await openDB();
+        const req = db.transaction("files").objectStore("files").get("alert");
+        const rec = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+        if (!rec || !rec.blob) { logEvent("⚠️ 音源重建失敗：本機已無儲存的音檔，請重新選擇音檔"); return false; }
+        const old = player.src;
+        currentBlob = rec.blob; currentName = rec.name || currentName;
+        const url = URL.createObjectURL(rec.blob);
+        player.src = url;
+        elPool.concat(warmEls).forEach(el => { if (el._real) el.src = url; }); // 已解鎖的元素換上新來源即可
+        lastSrcRefresh = Date.now();
+        logEvent("🔄 音源已重建（" + fmtSize(rec.blob.size) + "）");
+        if (old && old.indexOf("blob:") === 0) setTimeout(() => { try { URL.revokeObjectURL(old); } catch (e) {} }, 10000);
+        return true;
+      } catch (e) {
+        logEvent("⚠️ 音源重建失敗（" + ((e && e.name) || e) + "）");
+        return false;
+      } finally { refreshing = null; }
+    })();
+    return refreshing;
+  }
+
   async function forgetAudio() {
     try {
       const db = await openDB();
@@ -550,6 +583,10 @@
     trimBox.style.display = "block";
     origSize.textContent = fmtSize(blob.size);
     origDur.textContent = "讀取中…";
+    lastSrcRefresh = Date.now();
+    // 大檔案是 iOS 記憶體回收的首要目標——實測 54.9MB 的 WAV 在頁面開約 10 小時後
+    // 其 blob 網址被作廢，所有播放變成 NotSupportedError。提醒但不強制。
+    bigHint.style.display = blob.size > 20971520 ? "block" : "none";
     // 記錄檔案大小：整晚循環播放一個過大的音檔是記憶體壓力的來源之一，
     // 頁面不穩時要先看得到這個數字（瀏覽器內剪輯輸出的是未壓縮 WAV，很容易變大）
     logEvent("🎵 音檔：" + name + "（" + fmtSize(blob.size) + "）");
@@ -590,7 +627,18 @@
   // --- 剪輯：只解碼需要的片段（用位元組比例切出區段），大檔也不會撐爆記憶體 ---
   const trimBox = $("trimBox"), trimBtn = $("trimBtn"), trimStatus = $("trimStatus");
   const trimStart = $("trimStart"), trimLen = $("trimLen"), trimMono = $("trimMono");
-  const origDur = $("origDur"), origSize = $("origSize");
+  const origDur = $("origDur"), origSize = $("origSize"), trimEst = $("trimEst");
+  // 剪出來會有多大，按下去之前就要看得到——使用者那份 300 秒立體聲剪輯是 54.9MB，
+  // 大到 iOS 在頁面開約 10 小時後直接回收它的 blob 網址
+  function refreshTrimEst() {
+    const sec = Math.max(1, +trimLen.value || 0);
+    const bytes = 44100 * 2 * (trimMono.checked ? 1 : 2) * sec; // 44.1kHz 16-bit
+    trimEst.innerHTML = "剪出來大約 <b style=\"color:" + (bytes > 20971520 ? "var(--warn)" : "var(--text)") + "\">"
+      + fmtSize(bytes) + "</b>（輸出為未壓縮 WAV；越小越不容易被系統回收）";
+  }
+  trimLen.addEventListener("input", refreshTrimEst);
+  trimMono.addEventListener("change", refreshTrimEst);
+  refreshTrimEst();
 
   function fmtDur(sec) {
     if (!isFinite(sec)) return "未知";
@@ -790,7 +838,13 @@
     b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
     b.setUint32(24, 8000, true); b.setUint32(28, 16000, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
     w8(36, "data"); b.setUint32(40, n * 2, true);
-    _silentUrl = URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
+    // 用 data: URL 而非 blob:——iOS 會在長壽頁面上作廢 blob 網址（記憶體壓力回收），
+    // 08/08 那晚開了 10 小時後連這個 3KB 無聲檔都載不到，新元素全部解鎖失敗
+    //（NotSupportedError×4）。data URL 不會被回收。
+    const bytes = new Uint8Array(b.buffer);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    _silentUrl = "data:audio/wav;base64," + btoa(bin);
     return _silentUrl;
   }
   function attachAlertHandlers(el) {
@@ -1333,8 +1387,20 @@
     });
     else restore();
   }
-  function freshOn() { if (!freshTimer) freshTimer = setInterval(freshPulse, PULSE_MS); }
-  function freshOff() { if (freshTimer) { clearInterval(freshTimer); freshTimer = null; } }
+  function freshOn() {
+    if (!freshTimer) freshTimer = setInterval(freshPulse, PULSE_MS);
+    // 主動重建音源：不等 blob 網址被 iOS 作廢才補救（實測約 10 小時後失效）
+    if (!srcTimer) srcTimer = setInterval(() => {
+      if (!running || alerting || resetting || !player.src) return;
+      if (Date.now() - lastSrcRefresh < 7000000) return;
+      refreshAudioSrc();
+    }, 600000); // 每 10 分鐘檢查，實際每 2 小時才真的重建一次
+  }
+  function freshOff() {
+    if (freshTimer) { clearInterval(freshTimer); freshTimer = null; }
+    if (srcTimer) { clearInterval(srcTimer); srcTimer = null; }
+  }
+  let srcTimer = null;
 
   const trigMode = $("trigMode");
   trigMode.value = localStorage.getItem("trigMode") || "cry";
@@ -1434,9 +1500,11 @@
       // 跳過可省下約 2 秒的等待，警報更快出聲
       const wantFade = isManual && mins !== "once" && +fadeEnd.value < 1;
       const endVol = +fadeEnd.value;
-      // 取用順序：① 處女池元素（FIFO，路由最乾淨）② 熱身元素（池用完時接手，
-      // 授權剛被脈衝刷新過）③ #player（使用者親手按過才有授權，最後手段）
-      alertEl = elPool.shift() || warmEls.find(w => !w._inUse && w._unlockOK) || warmEls.find(w => !w._inUse) || player;
+      // 取用順序：① 處女池元素（優先挑解鎖成功的——解鎖失敗的不該排在好元素前面）
+      // ② 熱身元素（池用完時接手）③ #player（使用者親手按過才有授權，最後手段）
+      const okIdx = elPool.findIndex(e => e._unlockOK);
+      alertEl = (okIdx >= 0 ? elPool.splice(okIdx, 1)[0] : elPool.shift())
+        || warmEls.find(w => !w._inUse && w._unlockOK) || warmEls.find(w => !w._inUse) || player;
       const el = alertEl;
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
@@ -1469,7 +1537,7 @@
         // 播放嘗試鏈：一顆元素被擋不該讓整次警報啞掉，依序換下一顆再試。
         // 錯誤名稱是分辨病因的關鍵（NotAllowedError＝授權／AbortError＝被打斷／
         // NotSupportedError＝來源），連同元素身分、保連狀態、保鮮時間線一起留證
-        let attempt = 0;
+        let attempt = 0, srcFixed = false;
         const claim = el2 => {
           alertEl = el2;
           el2._inUse = true;
@@ -1493,8 +1561,25 @@
               + (lastFreshOK ? "｜距上次保鮮 " + Math.round((Date.now() - lastFreshOK) / 1000) + " 秒" : "｜尚無保鮮紀錄")
               + "）");
             attempt++;
+            // NotSupportedError ＝ 來源讀不到，換元素沒有用（大家指向同一個網址）。
+            // 先把音源從 IndexedDB 重建，再用同一顆元素重試
+            if ((err && err.name) === "NotSupportedError" && !srcFixed && attempt < 4) {
+              srcFixed = true;
+              refreshAudioSrc().then(ok => {
+                if (!ok) { giveUp(); return; }
+                el2._real = true; el2.src = player.src;
+                try { el2.currentTime = 0; } catch (e) {}
+                logEvent("↻ 音源重建後重試（" + elTag(el2) + "）");
+                tryPlay(el2);
+              });
+              return;
+            }
             const nxt = attempt < 3 ? nextEl() : null;
             if (nxt) { logEvent("↻ 改用下一顆元素重試（" + elTag(nxt) + "）"); tryPlay(claim(nxt)); return; }
+            giveUp();
+          });
+        };
+        const giveUp = () => {
             // 全部試完都不行——絕不能卡死在無聲的警報狀態：收尾、恢復監聽、嗶聲警示
             blockedRun++;
             logEvent("⚠️ 已連續 " + blockedRun + " 次觸發無法播放，改以嗶聲警示");
@@ -1505,7 +1590,6 @@
               blockedRun >= 3 ? "已連續 " + blockedRun + " 次只剩嗶聲——請碰一下畫面或重按「開始監聽」恢復"
                               : "回到頁面按一次「試聽」或「開始監聽」即可恢復正常播放");
             setTimeout(() => { try { beep(); } catch (e) {} }, 1200); // 等麥克風恢復後發聲
-          });
         };
         try { el.currentTime = 0; } catch (e) {}
         tryPlay(el);
