@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v69</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v70</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1778,8 +1778,13 @@
       bgFrames++;
       if (micLive && db > bgPeak) bgPeak = db;
       if (now - bgT0 > 60000) {
-        logEvent("背景偵測運作中（" + Math.round((now - bgT0) / 1000) + " 秒 " + bgFrames + " 幀，"
-          + (micLive ? "峰值 " + bgPeak.toFixed(0) + "dB" : "麥克風離線中") + "）");
+        // 幀數才是真相：實測有過「2 小時只跑 49 幀」（約每 2.5 分鐘一幀）的情況，
+        // 那等於偵測停擺。只寫「運作中」會讓人誤以為一切正常，必須分級示警
+        const secs = (now - bgT0) / 1000, fpm = bgFrames / (secs / 60);
+        const level = fpm < 60 ? "⚠️ 背景偵測幾乎停擺" : fpm < 400 ? "⚠️ 背景偵測被降頻" : "背景偵測運作中";
+        logEvent(level + "（" + Math.round(secs) + " 秒 " + bgFrames + " 幀＝每分鐘 " + Math.round(fpm) + " 幀，"
+          + (micLive ? "峰值 " + bgPeak.toFixed(0) + "dB" : "麥克風離線中") + "）"
+          + (fpm < 400 ? "──正常約 900，請讓網頁保持在前景" : ""));
         bgT0 = now; bgFrames = 0; bgPeak = -120;
       }
     }
