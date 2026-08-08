@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v66</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v67</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -921,6 +921,7 @@
     unlockWarm();   // 熱身元素：池用完後的無上限備援
     topUpPool();    // 補滿處女警報元素池（以無聲小檔解鎖）
     keeperOn();
+    freshOn();      // 無聲保鮮：不論保連是否可用，都要維持播放權限
     try {
       // 先收拾舊的錄音工作階段：變數一旦被覆寫，舊串流就再也沒人 stop()，
       // 會變成孤兒工作階段死抓著麥克風，讓之後每一次請求都永遠不回來
@@ -1118,6 +1119,7 @@
     if (source) { source.disconnect(); source = null; } // AudioContext 留給播放共用，不關閉
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     keeperOff();
+    freshOff();
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
     logEvent("停止監聽");
@@ -1202,12 +1204,14 @@
              .catch(err => { w.muted = false; w._unlockErr = (err && err.name) || "未知"; });
     });
   }
+  const PULSE_MS = 240000, PULSE_BACKOFF_MS = 1200000; // 正常 4 分鐘；連續失敗退避到 20 分鐘
   function keeperOn() {
     if (!keepCk.checked) return;
     ensureKeeper();
     pulseFails = 0;
     if (!keepTimer) {
-      keepTimer = setInterval(keepPulse, 240000);
+      pulseEvery = PULSE_MS;
+      keepTimer = setInterval(keepPulse, pulseEvery);
       logEvent("保持連線：每 4 分鐘向音響發送 5 秒保連訊號");
     }
   }
@@ -1216,8 +1220,19 @@
     pulsing = false;
     if (keeper) keeper.pause();
   }
+  // 改變脈衝節奏（退避／恢復）。整晚失效的教訓：這個機制絕不可以「靜默地
+  // 永久停用自己」——08/08 那晚它在開始後 8 分鐘就自我停用，勾選卻還顯示開啟，
+  // 熱身元素從此沒被刷新，早上發現 40 次觸發全部只剩嗶聲
+  function setPulseRate(ms, why) {
+    if (!keepTimer || pulseEvery === ms) return;
+    clearInterval(keepTimer);
+    pulseEvery = ms;
+    keepTimer = setInterval(keepPulse, ms);
+    logEvent("保連脈衝改為每 " + Math.round(ms / 60000) + " 分鐘（" + why + "）");
+  }
   let pulseN = 0;
   let pulseFails = 0;
+  let pulseEvery = PULSE_MS;
   let lastPulseOK = 0; // 最後一次「無手勢播放成功」的時戳
   // 熱身元素搭便車，不取代保連音軌：v53 曾讓兩者「輪流」發聲，結果保連音軌
   // 從每 4 分鐘變成每 16 分鐘才真正送一次訊號到音響（熱身元素的 17.5kHz 是否
@@ -1260,14 +1275,21 @@
         // 每次都記：這是「此刻無手勢播放是否還被允許」的唯一時間線參照，
         // 播放被擋時要拿它來比對（脈衝剛成功卻擋掉音樂＝問題出在元素個體）
         lastPulseOK = Date.now();
+        setPulseRate(PULSE_MS, "恢復正常"); // 只要成功一次就回到 4 分鐘
         logEvent("保連脈衝 #" + pulseN + " 已送出（" + (document.visibilityState === "visible" ? "前景" : "背景")
           + (rider ? "，順帶熱身#" + rider._id : "") + "）");
       }).catch(err => {
         pulseFails++;
-        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "）");
-        if (pulseFails >= 2 && keepTimer) { // 連續被擋代表播放授權已失效，別再白白中斷麥克風
-          clearInterval(keepTimer); keepTimer = null;
-          logEvent("保連脈衝連續被阻擋，已自動暫停此功能");
+        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "，累計 " + pulseFails + " 次）");
+        // 連續被擋只退避、不停用——中斷麥克風的成本降低即可，
+        // 停用會讓熱身元素永遠不再刷新（見本函式上方註解）
+        if (pulseFails >= 2) setPulseRate(PULSE_BACKOFF_MS, "連續被擋，改為低頻重試");
+        if (pulseFails >= 10 && keepCk.checked) {
+          // 真的完全不行了才收手，但一定要讓畫面誠實反映：勾選同步取消
+          keepCk.checked = false; localStorage.setItem("keepalive", "0");
+          keeperOff();
+          logEvent("⚠️ 保連脈衝連續失敗 10 次，已關閉「保持音響連線」（勾選同步取消）");
+          if (running && !alerting) setStatus("alert", "保持音響連線已自動關閉", "系統持續拒絕保連訊號；音響可能會閒置斷線");
         }
       });
     }, 800);
@@ -1284,6 +1306,36 @@
     logEvent(keepCk.checked ? "已開啟保持音響連線" : "已關閉保持音響連線");
   });
 
+  // —— 無聲保鮮脈衝：維持頁面的「無手勢播放權限」，與保持音響連線完全脫鉤。
+  // 08/08 的教訓：熱身元素的保鮮 100% 掛在保連脈衝上，保連一停（自我停用、
+  // 旗標卡住、使用者關閉都算）就整組失效，池裡 12 顆用完後整晚只剩嗶聲。
+  // 這裡改用 3KB 無聲小檔：不必送到音響，所以**不碰麥克風**、偵測零中斷，
+  // 純粹讓頁面「持續有播放活動」並刷新熱身元素的授權。
+  let freshTimer = null, freshN = 0, freshIdx = 0, lastFreshOK = 0;
+  function freshPulse() {
+    if (!running || alerting || resetting) return;
+    if (keepTimer && pulseEvery === PULSE_MS) return; // 保連正常運作中就交給它，別兩套打架
+    const ring = warmEls.filter(w => !w._inUse && w.paused);
+    if (!ring.length) return;
+    const w = ring[freshIdx++ % ring.length];
+    const back = w.src, real = w._real;
+    w.muted = true;
+    w.src = silentUrl();       // 換成無聲小檔（換 src 不影響播放授權，已實測）
+    const p = w.play();
+    const restore = () => { try { w.pause(); } catch (e) {} w.src = back; w._real = real; w.muted = false; };
+    if (p) p.then(() => {
+      freshN++; lastFreshOK = Date.now(); w._unlockOK = true;
+      setTimeout(restore, 200);
+      if (freshN <= 3 || freshN % 10 === 0) logEvent("🫧 保鮮脈衝 #" + freshN + "（熱身#" + w._id + "）");
+    }).catch(err => {
+      w._unlockOK = false; restore();
+      logEvent("⚠️ 保鮮脈衝被擋（" + ((err && err.name) || "未知") + "，熱身#" + w._id + "）——播放權限正在流失");
+    });
+    else restore();
+  }
+  function freshOn() { if (!freshTimer) freshTimer = setInterval(freshPulse, PULSE_MS); }
+  function freshOff() { if (freshTimer) { clearInterval(freshTimer); freshTimer = null; } }
+
   const trigMode = $("trigMode");
   trigMode.value = localStorage.getItem("trigMode") || "cry";
   if (trigMode.selectedIndex < 0) trigMode.value = "cry";
@@ -1295,6 +1347,13 @@
 
   let alertTimer = null;
   let lastAlertManual = false; // 這一輪播放是不是「手動播放」（決定播完要不要自動接手站崗）
+  let blockedRun = 0;          // 連續幾次觸發完全播不出來（整晚只剩嗶聲要看得見）
+  // 保連此刻的「實際」狀態，不是勾選狀態——08/08 那晚兩者不一致整整 11 小時
+  function keepState() {
+    if (!keepCk.checked) return "保連關";
+    if (!keepTimer) return "保連已停用";
+    return pulseEvery === PULSE_MS ? "保連運作中" : "保連退避中";
+  }
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
   let calUntil = 0;      // 開始監聽後的校準期：快速學習背景噪音，期間不觸發
 
@@ -1406,26 +1465,54 @@
         } else if (wantFade) {
           logEvent("⚠️ 元素池耗盡，本次全音量播放（重按一次開始監聽可補充）");
         }
-        el.currentTime = 0;
         let playStarted = false;
-        const pr = el.play();
-        if (pr) pr.then(() => { playStarted = true; }).catch(err => {
-          // 播放被擋（元素未經手勢解鎖）——絕不能讓系統卡死在無聲的警報狀態：
-          // 立刻收尾、恢復麥克風繼續監聽，並以嗶聲作為最後手段的可聽警示。
-          // 錯誤名稱是唯一能分辨病因的線索（NotAllowedError＝授權／AbortError＝
-          // 被打斷／NotSupportedError＝來源），連同元素身分與脈衝時間線一起留證
-          logEvent("⚠️ 播放被瀏覽器阻擋（" + ((err && err.name) || "未知") + "｜" + elTag(el)
-            + " " + (document.visibilityState === "visible" ? "前景" : "背景")
-            + (lastPulseOK ? "｜距上次脈衝 " + Math.round((Date.now() - lastPulseOK) / 1000) + " 秒" : "｜尚無脈衝紀錄")
-            + "），已恢復監聽並以嗶聲警示（回頁面按任意播放鈕可補充元素）");
-          stopAlert(true);
-          cooldownUntil = performance.now() + 8000;
-          setStatus("alert", head + " 播放被阻擋（嗶聲警示中）", "回到頁面按一次「試聽」或「開始監聽」即可恢復正常播放");
-          setTimeout(() => { try { beep(); } catch (e) {} }, 1200); // 等麥克風恢復後發聲
-        });
+        // 播放嘗試鏈：一顆元素被擋不該讓整次警報啞掉，依序換下一顆再試。
+        // 錯誤名稱是分辨病因的關鍵（NotAllowedError＝授權／AbortError＝被打斷／
+        // NotSupportedError＝來源），連同元素身分、保連狀態、保鮮時間線一起留證
+        let attempt = 0;
+        const claim = el2 => {
+          alertEl = el2;
+          el2._inUse = true;
+          if (el2 !== player && !el2._real) { el2.src = player.src; el2._real = true; }
+          if (el2 !== player) attachAlertHandlers(el2);
+          el2.loop = (mins !== "once");
+          try { el2.currentTime = 0; } catch (e) {}
+          return el2;
+        };
+        const nextEl = () => elPool.shift()
+          || warmEls.find(w => !w._inUse && w._unlockOK)
+          || warmEls.find(w => !w._inUse)
+          || (curEl() !== player ? player : null);
+        const tryPlay = el2 => {
+          const pr = el2.play();
+          if (!pr) { playStarted = true; return; }
+          pr.then(() => { playStarted = true; blockedRun = 0; }).catch(err => {
+            logEvent("⚠️ 播放被瀏覽器阻擋（" + ((err && err.name) || "未知") + "｜" + elTag(el2)
+              + " " + (document.visibilityState === "visible" ? "前景" : "背景")
+              + "｜" + keepState()
+              + (lastFreshOK ? "｜距上次保鮮 " + Math.round((Date.now() - lastFreshOK) / 1000) + " 秒" : "｜尚無保鮮紀錄")
+              + "）");
+            attempt++;
+            const nxt = attempt < 3 ? nextEl() : null;
+            if (nxt) { logEvent("↻ 改用下一顆元素重試（" + elTag(nxt) + "）"); tryPlay(claim(nxt)); return; }
+            // 全部試完都不行——絕不能卡死在無聲的警報狀態：收尾、恢復監聽、嗶聲警示
+            blockedRun++;
+            logEvent("⚠️ 已連續 " + blockedRun + " 次觸發無法播放，改以嗶聲警示");
+            stopAlert(true);
+            cooldownUntil = performance.now() + 8000;
+            setStatus("alert",
+              blockedRun >= 3 ? "⚠️ 播放持續被系統阻擋" : head + " 播放被阻擋（嗶聲警示中）",
+              blockedRun >= 3 ? "已連續 " + blockedRun + " 次只剩嗶聲——請碰一下畫面或重按「開始監聽」恢復"
+                              : "回到頁面按一次「試聽」或「開始監聽」即可恢復正常播放");
+            setTimeout(() => { try { beep(); } catch (e) {} }, 1200); // 等麥克風恢復後發聲
+          });
+        };
+        try { el.currentTime = 0; } catch (e) {}
+        tryPlay(el);
         // 播放健康檢查：媒體管線偶爾卡死（進度不動、聲音碎片循環、無法暫停），
         // 唯一可靠的解法是重載頁面
         setTimeout(() => {
+          const el = curEl();
           if (alerting && playStarted && (el.paused || el.currentTime < 0.3)) {
             logEvent("⚠️ 播放管線卡死，重載頁面恢復");
             scheduleRouteReset();
