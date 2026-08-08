@@ -174,6 +174,23 @@ description: iOS Safari 網頁音訊開發實戰經驗——麥克風＋播放�
 - 診斷設計：紀錄要能回答「這顆元素是怎麼來的」（手勢解鎖／程式建立／備援），
   否則失敗時只看得到「被阻擋」，永遠查不出病因。
 
+### `blob:` URL 在長壽頁面上會被 iOS 作廢（`NotSupportedError`）
+
+- 症狀：頁面連續開約 10 小時後，**所有**播放變成 `NotSupportedError` 且
+  `readyState === 0`（連 metadata 都沒載到）。連 3KB 的無聲解鎖檔也一起掛，
+  因為它同樣是 `URL.createObjectURL` 產生的。**重開頁面立刻恢復**——這是最快的驗證法。
+- 成因：iOS 在記憶體壓力下回收 Blob 的後備儲存，網址還在但指向空的。
+  檔案越大越早被挑中（實測 54.9MB 的未壓縮 WAV）。
+- 解法三件套：
+  1. 小型固定素材（無聲解鎖檔、提示音）一律用 **`data:` URL**，不會被回收。
+  2. 大型使用者素材要能**自我重建**：從 IndexedDB 重新讀出 Blob → 新的
+     `createObjectURL` → 指派給所有已解鎖元素（換 src 不影響解鎖狀態）。
+     被動（收到 `NotSupportedError` 時）與主動（每 1～2 小時）都要做。
+  3. 引導使用者把素材做小（瀏覽器內剪輯輸出的是未壓縮 WAV，300 秒立體聲就 50MB）。
+- **`err.name` 決定要修什麼**：`NotAllowedError` ＝ 授權問題，換元素／刷新播放權限；
+  `NotSupportedError` ＝ 來源問題，**換元素完全沒用**（大家指向同一個死網址），
+  必須重建來源。沒有記錄錯誤名稱就會把兩者混為一談，白花好幾天。
+
 ## 五之二、瀏覽器端 ML 聲音分類（YAMNet）
 
 - **模型取得**（受限網路環境）：tfhub/kaggle/googleapis/jsdelivr/unpkg/HF 常被擋，但
