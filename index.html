@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v68</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v69</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1288,6 +1288,13 @@
   let pulseFails = 0;
   let pulseEvery = PULSE_MS;
   let lastPulseOK = 0; // 最後一次「無手勢播放成功」的時戳
+  // 停掉麥克風之後要等多久才播。08/08 的紀錄給了乾淨的對照：同一顆熱身元素，
+  // 在「不碰麥克風」的保鮮脈衝中連續 10 次成功，在「先停麥克風、等 800ms」的
+  // 保連脈衝中卻連續被擋（NotAllowedError）——差別不在元素，在音訊工作階段
+  // 還沒轉換完成就開始播。800ms 曾經夠用（08/01 連續 145 次成功），所以不寫死，
+  // 改成失敗就加長、成功就慢慢收回來
+  const PULSE_WAIT_MIN = 800, PULSE_WAIT_MAX = 3200;
+  let pulseWait = PULSE_WAIT_MIN;
   // 熱身元素搭便車，不取代保連音軌：v53 曾讓兩者「輪流」發聲，結果保連音軌
   // 從每 4 分鐘變成每 16 分鐘才真正送一次訊號到音響（熱身元素的 17.5kHz 是否
   // 真的走到藍牙無從驗證），當晚音響就斷線了。保連音軌每次都必須照常發送。
@@ -1315,6 +1322,7 @@
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
     if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
+    const wait = pulseWait;
     setTimeout(() => {
       if (!pulsing) return;
       if (rider) {
@@ -1330,11 +1338,16 @@
         // 播放被擋時要拿它來比對（脈衝剛成功卻擋掉音樂＝問題出在元素個體）
         lastPulseOK = Date.now();
         setPulseRate(PULSE_MS, "恢復正常"); // 只要成功一次就回到 4 分鐘
+        pulseWait = Math.max(PULSE_WAIT_MIN, pulseWait - 200); // 成功就慢慢把等待收回來
         logEvent("保連脈衝 #" + pulseN + " 已送出（" + (document.visibilityState === "visible" ? "前景" : "背景")
-          + (rider ? "，順帶熱身#" + rider._id : "") + "）");
+          + (rider ? "，順帶熱身#" + rider._id : "") + "，等待 " + wait + "ms）");
       }).catch(err => {
         pulseFails++;
-        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "，累計 " + pulseFails + " 次）");
+        // 拉長「停麥克風→播放」的間隔再試：實測 800ms 有時不夠讓音訊工作階段轉換完成
+        const grew = pulseWait < PULSE_WAIT_MAX;
+        if (grew) pulseWait = Math.min(PULSE_WAIT_MAX, pulseWait + 800);
+        logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "，等待 " + wait + "ms，累計 " + pulseFails + " 次）"
+          + (grew ? "──下次改等 " + pulseWait + "ms" : ""));
         // 連續被擋只退避、不停用——中斷麥克風的成本降低即可，
         // 停用會讓熱身元素永遠不再刷新（見本函式上方註解）
         if (pulseFails >= 2) setPulseRate(PULSE_BACKOFF_MS, "連續被擋，改為低頻重試");
@@ -1346,13 +1359,13 @@
           if (running && !alerting) setStatus("alert", "保持音響連線已自動關閉", "系統持續拒絕保連訊號；音響可能會閒置斷線");
         }
       });
-    }, 800);
+    }, wait);
     setTimeout(() => {
       if (rider) rider.pause();
       keeper.pause();
       pulsing = false;
       if (running && !alerting) recoverMic(true);
-    }, 5800);
+    }, wait + 5000); // 訊號固定播 5 秒，等待拉長時整體跟著往後移
   }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
