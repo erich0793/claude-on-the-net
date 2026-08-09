@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v70</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v71</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1237,6 +1237,35 @@
     const p = keeper.play();
     if (p) p.then(() => { keeper.pause(); keeper.muted = false; }).catch(() => { keeper.muted = false; });
   }
+  // —— 保連音軌的「不碰麥克風」保鮮。08/09 的紀錄揭穿了一個結構性偏心：
+  // 熱身元素每 4 分鐘被無聲保鮮脈衝刷新一次，活得好好的；保連音軌卻**只在
+  // 「剛放掉麥克風」的那一瞬間**播放——那正是最容易被擋的時刻。一旦第一次
+  // 被擋，之後每次重試都在同樣惡劣的條件下進行，授權再也回不來（當晚 4 次
+  // 全滅，前一晚 10 次全滅，等待從 800ms 加到 3200ms 都沒用）。
+  // 這裡讓保連音軌也享有同一套待遇：換成無聲小檔、靜音、不動麥克風播 200ms，
+  // 把授權在「乾淨環境」下刷回來，下一次脈衝才有機會成功。
+  let keeperFreshN = 0, keeperFreshing = false, wantKeeperFresh = false;
+  function refreshKeeper(why) {
+    if (!keeper || pulsing || keeperFreshing || !keeper.paused) return;
+    keeperFreshing = true;
+    const back = keeper.src, loop = keeper.loop;
+    keeper.muted = true; keeper.loop = false;
+    keeper.src = silentUrl();
+    const restore = () => {
+      try { keeper.pause(); } catch (e) {}
+      keeper.src = back; keeper.loop = loop; keeper.muted = false; keeperFreshing = false;
+    };
+    const p = keeper.play();
+    if (p) p.then(() => {
+      keeperFreshN++;
+      setTimeout(restore, 200);
+      if (keeperFreshN <= 3 || keeperFreshN % 10 === 0) logEvent("🔧 保連音軌已刷新授權（" + why + "，第 " + keeperFreshN + " 次）");
+    }).catch(err => {
+      restore();
+      logEvent("⚠️ 保連音軌刷新失敗（" + ((err && err.name) || "未知") + "）——連不碰麥克風都被擋");
+    });
+    else restore();
+  }
   // —— 熱身元素：與保連音軌同一種元素（同一份 17.5kHz 訊號、人耳聽不到），
   // 跟著保連脈衝輪流發聲，播放授權因此每隔幾分鐘就被一次「真的成功播放」刷新。
   // 元素池用完後由它們接手警報，觸發次數不再有上限。
@@ -1307,7 +1336,7 @@
   }
   let pulseSkipped = false;
   function keepPulse() {
-    if (!running || alerting || recovering || pulsing || resetting) return;
+    if (!running || alerting || recovering || pulsing || resetting || keeperFreshing) return;
     // 背景時絕不放掉麥克風：iOS 不讓背景頁面重新取得麥克風，脈衝一釋放就要
     // 等到你回到前景才拿得回來（實測空窗 15～42 秒，甚至逾時失敗）。
     // 音響閒置斷線是可以忍的，整段聽不見寶寶不行。
@@ -1323,6 +1352,20 @@
     if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
     const wait = pulseWait;
+    // 收尾（放開元素、收回麥克風）獨立成一個只跑一次的函式：訊號送不出去時
+    // 不必把 5 秒的播放窗口等完——那 5 秒是為了「讓音響收到訊號」，被擋的時候
+    // 什麼都沒送出，卻照樣讓麥克風多聾 5 秒。實測每次失敗要付 8 秒的耳聾成本
+    let pulseEnded = false;
+    const endPulse = () => {
+      if (pulseEnded) return;
+      pulseEnded = true;
+      if (rider) rider.pause();
+      keeper.pause();
+      pulsing = false;
+      if (running && !alerting) recoverMic(true);
+      // 麥克風回來之後才刷新授權（刷新本身不碰麥克風，但別和重連擠在一起）
+      if (wantKeeperFresh) { wantKeeperFresh = false; setTimeout(() => refreshKeeper("脈衝被擋後"), 2000); }
+    };
     setTimeout(() => {
       if (!pulsing) return;
       if (rider) {
@@ -1351,6 +1394,18 @@
         // 連續被擋只退避、不停用——中斷麥克風的成本降低即可，
         // 停用會讓熱身元素永遠不再刷新（見本函式上方註解）
         if (pulseFails >= 2) setPulseRate(PULSE_BACKOFF_MS, "連續被擋，改為低頻重試");
+        // 被擋就先把授權在乾淨環境刷回來，下一次才有機會成功
+        wantKeeperFresh = true;
+        // 沒有訊號送出去，就別再占著麥克風——立刻收尾
+        if (!rider || rider.paused) endPulse();
+        // 這個頁面「從來沒有成功過一次」時，四次就夠證明這台裝置吃不下保連訊號；
+        // 再試下去只是每 20 分鐘賠上一次麥克風空窗。曾經成功過才適用寬鬆的 10 次
+        if (pulseFails >= 4 && !lastPulseOK && keepCk.checked) {
+          keepCk.checked = false; localStorage.setItem("keepalive", "0");
+          keeperOff();
+          logEvent("⚠️ 保連訊號連 4 次都送不出去（本次開啟以來一次都沒成功），已關閉「保持音響連線」──偵測與播放不受影響");
+          if (running && !alerting) setStatus("alert", "保持音響連線已自動關閉", "這台裝置擋下所有保連訊號；哭聲偵測與播放照常運作");
+        }
         if (pulseFails >= 10 && keepCk.checked) {
           // 真的完全不行了才收手，但一定要讓畫面誠實反映：勾選同步取消
           keepCk.checked = false; localStorage.setItem("keepalive", "0");
@@ -1360,12 +1415,7 @@
         }
       });
     }, wait);
-    setTimeout(() => {
-      if (rider) rider.pause();
-      keeper.pause();
-      pulsing = false;
-      if (running && !alerting) recoverMic(true);
-    }, wait + 5000); // 訊號固定播 5 秒，等待拉長時整體跟著往後移
+    setTimeout(endPulse, wait + 5000); // 訊號固定播 5 秒，等待拉長時整體跟著往後移
   }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
@@ -1382,6 +1432,9 @@
   function freshPulse() {
     if (!running || alerting || resetting) return;
     if (keepTimer && pulseEvery === PULSE_MS) return; // 保連正常運作中就交給它，別兩套打架
+    // 保連退避中（或已關閉）時，保連音軌同樣需要保鮮——它先前唯一的刷新來源
+    // 就是「成功的保連脈衝」，一旦被擋就永遠等不到，只能靠這裡把授權救回來
+    refreshKeeper("保鮮脈衝順帶");
     const ring = warmEls.filter(w => !w._inUse && w.paused);
     if (!ring.length) return;
     const w = ring[freshIdx++ % ring.length];
