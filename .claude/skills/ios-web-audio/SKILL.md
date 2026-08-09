@@ -231,8 +231,14 @@ description: iOS Safari 網頁音訊開發實戰經驗——麥克風＋播放�
 - **音訊餵入**：AnalyserNode 只給快照；YAMNet 要 16kHz 連續 0.975 秒（15600 樣本）→ 用
   ScriptProcessorNode 收 PCM 進環形緩衝，線性插值降取樣。**WebKit 的 ScriptProcessor 必須
   接到 destination 才會運轉**——經 0 增益節點轉接，避免麥克風回授。
-- **融合策略**：AI 分數新鮮（<2.5 秒）時作主要證據＋大人語音否決者；過期/未載入退回 DSP。
-  傳統條件成立時要求 AI 至少半門檻背書。實測價值：純音/雜訊會騙過頻譜條件，AI 正確否決。
+- **融合策略**：AI 只當「加分證據」＋「大人語音否決者」，**永遠不是必要條件**；
+  過期/未載入就退回純 DSP。實測價值：純音/雜訊會騙過頻譜條件，AI 正確否決。
+- **實機打臉：YAMNet 對真實嬰兒哭聲可能整場 0 分。** 使用者確認為真哭的兩次觸發
+  （F0≈596/678Hz 與 276/455Hz），YAMNet 的嬰兒分數是 **0%～1%**；整晚所有診斷行的
+  `AI嬰` 幾乎都是 0%。AudioSet 的 "Baby cry, infant cry" 類別顯然涵蓋不了近距離、
+  單支手機麥克風、真實臥室的哭聲。**若當初把 AI 設成必要條件或半門檻背書，這兩次
+  真哭都會被漏掉。** 教訓：ML 分類器在自己的 benchmark 之外可以完全失效，
+  它只配當加分項；決策主幹必須是你自己驗證過的聲學特徵。
 - **無音訊裝置的容器測試**：chromium 假裝置旗標可能無效，改用 `page.addInitScript` 覆寫
   `getUserMedia` 回傳 OscillatorNode→MediaStreamDestination 的串流，可全管線煙霧測試。
   讀收合 `<details>` 內元素要用 `textContent`（`innerText` 對隱藏元素回空字串）。
