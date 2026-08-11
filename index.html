@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v72</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v73</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1255,13 +1255,18 @@
     const p = keeper.play();
     if (p) p.then(() => { keeper.pause(); keeper.muted = false; }).catch(() => { keeper.muted = false; });
   }
-  // —— 保連音軌的「不碰麥克風」保鮮。08/09 的紀錄揭穿了一個結構性偏心：
-  // 熱身元素每 4 分鐘被無聲保鮮脈衝刷新一次，活得好好的；保連音軌卻**只在
-  // 「剛放掉麥克風」的那一瞬間**播放——那正是最容易被擋的時刻。一旦第一次
-  // 被擋，之後每次重試都在同樣惡劣的條件下進行，授權再也回不來（當晚 4 次
-  // 全滅，前一晚 10 次全滅，等待從 800ms 加到 3200ms 都沒用）。
-  // 這裡讓保連音軌也享有同一套待遇：換成無聲小檔、靜音、不動麥克風播 200ms，
-  // 把授權在「乾淨環境」下刷回來，下一次脈衝才有機會成功。
+  // —— 保連音軌的「不碰麥克風」保鮮：換成無聲小檔、靜音、不動麥克風播 200ms。
+  //
+  // 【這不是解方，是診斷工具——別再把它當成修復手段】
+  // 原本的假設是「保連音軌只在剛放掉麥克風那一瞬間播放，被擋一次就再也刷不回授權」，
+  // 08/11 的紀錄推翻了它：三次刷新在乾淨環境下全部成功，下一次脈衝照樣被擋
+  //（18:06 刷新→18:10 被擋，18:10、18:14 刷新→18:30 被擋）。同一時段的無聲保鮮
+  // 脈衝也全數成功，而每次保連被擋時「熱身#N 刷新被擋」必定同時出現。
+  // 結論：**授權根本沒有流失，被系統拒絕的是「剛釋放麥克風」這個時刻本身**，
+  // 而且是整批拒絕（連陪跑的元素一起擋），與元素個體無關。
+  // 保留這個機制的理由只剩診斷價值：刷新成功 ＝ 可以排除「授權流失」這個假設，
+  // 直接往時序問題去找。成本極低（200ms、不碰麥克風），但別指望它治好脈衝。
+  const POST_BLOCK = "脈衝被擋後";
   let keeperFreshN = 0, keeperFreshing = false, wantKeeperFresh = false;
   function refreshKeeper(why) {
     if (!keeper || pulsing || keeperFreshing || !keeper.paused) return;
@@ -1277,7 +1282,11 @@
     if (p) p.then(() => {
       keeperFreshN++;
       setTimeout(restore, 200);
-      if (keeperFreshN <= 3 || keeperFreshN % 10 === 0) logEvent("🔧 保連音軌已刷新授權（" + why + "，第 " + keeperFreshN + " 次）");
+      // 「被擋之後」的刷新每一次都要看得見——那正是要觀察機制有沒有動的時候。
+      // 08/11 就吃過虧：第 3 次被擋後的刷新剛好落在節流區間，害人以為機制沒啟動。
+      // 失敗期間的例行保鮮刷新仍然節流：一次被擋配一行就夠，多的只是雜訊
+      if (why === POST_BLOCK || keeperFreshN <= 3 || keeperFreshN % 10 === 0)
+        logEvent("🔧 保連音軌已刷新授權（" + why + "，第 " + keeperFreshN + " 次）");
     }).catch(err => {
       restore();
       logEvent("⚠️ 保連音軌刷新失敗（" + ((err && err.name) || "未知") + "）——連不碰麥克風都被擋");
@@ -1310,6 +1319,9 @@
     if (!keepCk.checked) return;
     ensureKeeper();
     pulseFails = 0;
+    // 「本次開啟以來一次都沒成功」的四振出局要以**這次監聽**為範圍，訊息才誠實。
+    // 不歸零的話，早上開著的頁面只要曾經成功過，晚上連續全滅也永遠走不到收手機制
+    lastPulseOK = 0;
     if (!keepTimer) {
       pulseEvery = PULSE_MS;
       keepTimer = setInterval(keepPulse, pulseEvery);
@@ -1384,7 +1396,7 @@
       pulsing = false;
       if (running && !alerting) recoverMic(true);
       // 麥克風回來之後才刷新授權（刷新本身不碰麥克風，但別和重連擠在一起）
-      if (wantKeeperFresh) { wantKeeperFresh = false; setTimeout(() => refreshKeeper("脈衝被擋後"), 2000); }
+      if (wantKeeperFresh) { wantKeeperFresh = false; setTimeout(() => refreshKeeper(POST_BLOCK), 2000); }
     };
     setTimeout(() => {
       if (!pulsing) return;
