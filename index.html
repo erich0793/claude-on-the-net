@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v74</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v75</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1130,6 +1130,9 @@
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
       calUntil = performance.now() + 2000;
+      // 這條路自己拿回麥克風，不經過 recoverMic——旗標要在這裡歸位，
+      // 否則播放留下的 micOffPlaying 會讓下一次例行重連被誤標成「播放期間離線」
+      micOffAt = 0; micOffPlaying = false;
       logEvent("音訊已重建，恢復監聽");
       if (running && !alerting) setStatus("listening", "監聽中…", "已回到偵測狀態");
     } catch (e) {
@@ -1140,7 +1143,8 @@
   }
 
   let recovering = false;
-  let micOffAt = 0; // 主動關閉麥克風的時戳：用來記錄「聽不見」的空窗有多長
+  let micOffAt = 0;      // 主動關閉麥克風的時戳：用來記錄「聽不見」的空窗有多長
+  let micOffPlaying = false; // 這次關閉是為了播放（播放期間本來就該關，不是故障）
   async function recoverMic(silent) {
     if (recovering || !running || alerting || pulsing || resetting) return;
     const t0 = stream && stream.getAudioTracks()[0];
@@ -1167,11 +1171,15 @@
       const offSecs = micOffAt ? Math.round((Date.now() - micOffAt) / 1000) : 0;
       // 保連正在失敗時不省這一行：那段時間麥克風照樣離線，而失敗的脈衝不會寫出
       // 承載秒數的那一行，省掉就等於把失聰時間藏起來——異常期間一律回到全記錄
-      const routine = silent && micOffAt && offSecs < 10 && !pulseFails;
+      const routine = silent && micOffAt && offSecs < 10 && !pulseFails && !micOffPlaying;
       if (routine) routineMicOff = offSecs;
+      // 播放期間關麥克風是設計行為（iOS 在錄音時會把輸出留在手機喇叭），使用者也知道
+      // 正在放音樂——標成 ⚠️ 只會稀釋真正的警訊。⚠️ 留給「沒有理由的失聰」
+      else if (micOffPlaying) logEvent("麥克風重連：" + ((track && track.label) || "未知")
+        + "（播放期間離線 " + offSecs + " 秒）");
       else logEvent((offSecs >= 10 ? "⚠️ 麥克風空窗 " : "麥克風重連：") + ((track && track.label) || "未知")
         + (offSecs ? "（離線 " + offSecs + " 秒）" : ""));
-      micOffAt = 0;
+      micOffAt = 0; micOffPlaying = false;
       if (!silent) {
         if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
         logEvent("麥克風中斷後已自動重連");
@@ -1331,6 +1339,9 @@
   // 依據 08/01 的整夜紀錄：保連音軌無手勢播放 145 次全數成功；手勢解鎖過的元素
   // 放 8 小時仍可播；換 src 不影響播放授權（池元素全是換過 src 的）。
   let warmEls = [];
+  // 熱身元素最後一次「真的被成功刷新」的時戳。這是無聲保鮮要不要接手的唯一依據——
+  // 不可以改用「保連脈衝在不在跑」當代理指標，08/12 就是這樣整晚失聲的（見 freshPulse）
+  let lastWarmOK = 0;
   function unlockWarm() {
     while (warmEls.length < 3) {
       const w = new Audio(keepWavUrl());
@@ -1342,7 +1353,7 @@
       if (w._inUse || !w.paused || w._unlockOK) return; // 正在當警報／正在脈衝／已解鎖就別碰
       w.muted = true;
       const p = w.play();
-      if (p) p.then(() => { if (!w._inUse) w.pause(); w.muted = false; w._unlockOK = true; })
+      if (p) p.then(() => { if (!w._inUse) w.pause(); w.muted = false; w._unlockOK = true; lastWarmOK = Date.now(); })
              .catch(err => { w.muted = false; w._unlockErr = (err && err.name) || "未知"; });
     });
   }
@@ -1413,7 +1424,7 @@
     pulsing = true;
     const rider = warmRider(); // 與保連音軌同時播放，順便刷新它的播放授權
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
-    if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = false; }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
     const wait = pulseWait;
     // 收尾（放開元素、收回麥克風）獨立成一個只跑一次的函式：訊號送不出去時
@@ -1435,8 +1446,12 @@
       if (rider) {
         rider.currentTime = 0;
         const rp = rider.play();
-        if (rp) rp.then(() => { rider._unlockOK = true; })
-                  .catch(err => { rider._unlockOK = false; logEvent("⚠️ 熱身#" + rider._id + " 刷新被擋（" + ((err && err.name) || "未知") + "）"); });
+        // 失敗時**不可以**把 _unlockOK 標成 false：這一步發生在剛釋放麥克風的瞬間，
+        // 而那個時刻是整批拒絕（v73 實測），跟這顆元素自己有沒有播放授權無關。
+        // 標了就會讓 trigger 誤判「這顆不能用」，並蓋掉無聲保鮮剛剛驗證過的結果。
+        // 只有不碰麥克風的路徑（保鮮脈衝／unlockWarm）才有資格認定一顆元素的授權
+        if (rp) rp.then(() => { rider._unlockOK = true; lastWarmOK = Date.now(); })
+                  .catch(err => { logEvent("⚠️ 熱身#" + rider._id + " 刷新被擋（" + ((err && err.name) || "未知") + "）"); });
       }
       const p = keeper.play();
       if (p) p.then(() => {
@@ -1504,9 +1519,16 @@
   let freshTimer = null, freshN = 0, freshIdx = 0, lastFreshOK = 0;
   function freshPulse() {
     if (!running || alerting || resetting) return;
-    if (keepTimer && pulseEvery === PULSE_MS) return; // 保連正常運作中就交給它，別兩套打架
-    // 保連退避中（或已關閉）時，保連音軌同樣需要保鮮——它先前唯一的刷新來源
-    // 就是「成功的保連脈衝」，一旦被擋就永遠等不到，只能靠這裡把授權救回來
+    // 讓位的前提是「熱身元素確實有被刷新」，不是「保連脈衝有在跑」。
+    // 08/12 整晚失聲的教訓：保連脈衝自己 100 次全部成功（訊號有送到音響），
+    // 但它「順帶」刷新熱身元素那一步每次都被擋——那一步發生在剛釋放麥克風的瞬間。
+    // 當時這道關卡只看保連節奏（keepTimer && pulseEvery === PULSE_MS），
+    // 於是無聲保鮮 8 小時沒跑過，三顆熱身元素的授權全死，池一用完就整晚只剩嗶聲。
+    // 現在直接問「熱身元素最近真的被刷新過嗎」：順帶刷新成功就照舊讓位、不打架；
+    // 一旦順帶刷新失效，下一輪就由這裡（不碰麥克風的路徑）接手
+    if (Date.now() - lastWarmOK < PULSE_MS * 1.5) return;
+    // 保連音軌同樣需要保鮮——它先前唯一的刷新來源就是「成功的保連脈衝」，
+    // 一旦被擋就永遠等不到，只能靠這裡把授權救回來
     refreshKeeper("保鮮脈衝順帶");
     const ring = warmEls.filter(w => !w._inUse && w.paused);
     if (!ring.length) return;
@@ -1517,7 +1539,7 @@
     const p = w.play();
     const restore = () => { try { w.pause(); } catch (e) {} w.src = back; w._real = real; w.muted = false; };
     if (p) p.then(() => {
-      freshN++; lastFreshOK = Date.now(); w._unlockOK = true;
+      freshN++; lastFreshOK = lastWarmOK = Date.now(); w._unlockOK = true;
       setTimeout(restore, 200);
       if (freshN <= 3 || freshN % 10 === 0) logEvent("🫧 保鮮脈衝 #" + freshN + "（熱身#" + w._id + "）");
     }).catch(err => {
@@ -1553,6 +1575,7 @@
   let alertTimer = null;
   let lastAlertManual = false; // 這一輪播放是不是「手動播放」（決定播完要不要自動接手站崗）
   let blockedRun = 0;          // 連續幾次觸發完全播不出來（整晚只剩嗶聲要看得見）
+  let lastDeadWarn = 0;        // 「備援全滅」的警告節流，每 10 分鐘最多一次
   // 保連此刻的「實際」狀態，不是勾選狀態——08/08 那晚兩者不一致整整 11 小時
   function keepState() {
     if (!keepCk.checked) return "保連關";
@@ -1642,6 +1665,15 @@
       // 取用順序：① 處女池元素（優先挑解鎖成功的——解鎖失敗的不該排在好元素前面）
       // ② 熱身元素（池用完時接手）③ #player（使用者親手按過才有授權，最後手段）
       const okIdx = elPool.findIndex(e => e._unlockOK);
+      // 池空且沒有任何一顆熱身元素還有授權 ＝ 備援全滅，這一次很可能只會發出嗶聲。
+      // 08/12 就是從池空（02:30）默默走到連續 7 次無聲（03:34）之間整整一小時沒人知道，
+      // 紀錄裡只有每 4 分鐘一行不起眼的「熱身#N 刷新被擋」
+      if (okIdx < 0 && !elPool.length && !warmEls.some(w => !w._inUse && w._unlockOK)
+          && Date.now() - lastDeadWarn > 600000) {
+        lastDeadWarn = Date.now();
+        logEvent("⚠️ 備援元素已全滅（元素池空，熱身元素全部失去播放授權）——這次很可能只會發出嗶聲，請碰一下畫面補滿元素池");
+        setStatus("alert", "備援元素已全滅", "請碰一下畫面（任何位置）補滿元素池，否則接下來的觸發只會有嗶聲");
+      }
       alertEl = (okIdx >= 0 ? elPool.splice(okIdx, 1)[0] : elPool.shift())
         || warmEls.find(w => !w._inUse && w._unlockOK) || warmEls.find(w => !w._inUse) || player;
       const el = alertEl;
@@ -1660,7 +1692,7 @@
         setStatus("alert", head + " 播放中…", "");
       }
       // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭
-      if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); }
+      if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = true; }
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
       setTimeout(async () => {
         // 淡出：為本輪建立專屬全新引擎；失敗或引擎劣化則自動退全音量（警報永遠有聲）。
