@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v71</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v72</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -318,20 +318,30 @@
   function renderLog() {
     logBox.innerHTML = logArr.slice().reverse().map(l => l.replace(/</g, "&lt;")).join("<br>") || "（尚無紀錄）";
   }
+  const LOG_MAX = 800; // 約 50KB，遠低於 localStorage 上限；夠涵蓋好幾晚
+  const ROUTINE_RE = /保連脈衝 #\d+ 已送出|麥克風重連：|🫧 保鮮脈衝/;
+  const IMPORTANT_RE = /🔊|⚠️|🔧|🔄|開始監聽|停止監聽|📄|偵測到短聲/;
   function logEvent(msg) {
     const t = new Date();
     const pad = n => (n < 10 ? "0" : "") + n;
     logArr.push(pad(t.getMonth() + 1) + "/" + pad(t.getDate()) + " " + pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds()) + "　" + msg);
-    // 超量時優先丟棄最舊的「診斷」行：診斷每 10 秒一筆，會把半夜的觸發、
-    // 阻擋、麥克風事件整批洗掉，隔天就無從回顧
-    while (logArr.length > 400) {
+    // 超量時分層淘汰：例行心跳（診斷、保連脈衝、麥克風重連）會把半夜真正發生的
+    // 觸發與警告整批擠掉，隔天就無從回顧。先丟最舊的例行行，重要的事件行留到最後
+    while (logArr.length > LOG_MAX) {
       const i = logArr.findIndex(l => l.indexOf("診斷：") >= 0);
-      logArr.splice(i >= 0 ? i : 0, 1);
+      const j = i >= 0 ? i : logArr.findIndex(l => ROUTINE_RE.test(l));
+      const k = j >= 0 ? j : logArr.findIndex(l => !IMPORTANT_RE.test(l));
+      logArr.splice(k >= 0 ? k : 0, 1); // 全是重要行時才丟最舊的（保底，不可無限成長）
     }
     try { localStorage.setItem("evlog", JSON.stringify(logArr)); } catch (e) {}
     renderLog();
   }
-  $("clearLogBtn").addEventListener("click", () => { logArr = []; localStorage.removeItem("evlog"); renderLog(); });
+  // 清空要留痕：手動清除與自動淘汰造成的表象一模一樣（紀錄從半夜某個時間點才開始），
+  // 沒有這一行就分不出「開頭為什麼不見了」，會害人把兩者搞混而誤判病因
+  $("clearLogBtn").addEventListener("click", () => {
+    logArr = []; localStorage.removeItem("evlog");
+    logEvent("📄 紀錄已清除");
+  });
   renderLog();
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
@@ -1119,8 +1129,16 @@
       calUntil = performance.now() + 2000; // 重連後快速重校背景噪音基準，期間不觸發
       // 若顯示藍牙裝置名即為路由問題的元兇；離線秒數用來抓「脈衝／播放後遲遲拿不回
       // 麥克風」的失聰空窗（背景時 getUserMedia 有被拖住的跡象）
-      logEvent("麥克風重連：" + ((track && track.label) || "未知")
-        + (micOffAt ? "（離線 " + Math.round((Date.now() - micOffAt) / 1000) + " 秒）" : ""));
+      // 脈衝後的例行重連（silent 且空窗很短）不再自己佔一行——它每 4 分鐘必然出現一次、
+      // 內容永遠是「離線 6 秒」，資訊量為零卻吃掉一半的紀錄額度。秒數存起來由脈衝那行帶出。
+      // 空窗拉長才是真正要看見的失聰事件（背景拿不回麥克風的症狀就是幾十秒），一律照記
+      const offSecs = micOffAt ? Math.round((Date.now() - micOffAt) / 1000) : 0;
+      // 保連正在失敗時不省這一行：那段時間麥克風照樣離線，而失敗的脈衝不會寫出
+      // 承載秒數的那一行，省掉就等於把失聰時間藏起來——異常期間一律回到全記錄
+      const routine = silent && micOffAt && offSecs < 10 && !pulseFails;
+      if (routine) routineMicOff = offSecs;
+      else logEvent((offSecs >= 10 ? "⚠️ 麥克風空窗 " : "麥克風重連：") + ((track && track.label) || "未知")
+        + (offSecs ? "（離線 " + offSecs + " 秒）" : ""));
       micOffAt = 0;
       if (!silent) {
         if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
@@ -1315,6 +1333,8 @@
   }
   let pulseN = 0;
   let pulseFails = 0;
+  let lastPulseVis = true;   // 上一次脈衝時是不是前景（狀態一變就要留紀錄）
+  let routineMicOff = 0;     // 最近一次「例行」麥克風空窗秒數，併進脈衝那一行帶出來
   let pulseEvery = PULSE_MS;
   let lastPulseOK = 0; // 最後一次「無手勢播放成功」的時戳
   // 停掉麥克風之後要等多久才播。08/08 的紀錄給了乾淨的對照：同一顆熱身元素，
@@ -1376,14 +1396,23 @@
       }
       const p = keeper.play();
       if (p) p.then(() => {
+        const wasFailing = pulseFails > 0;
         pulseN++; pulseFails = 0;
         // 每次都記：這是「此刻無手勢播放是否還被允許」的唯一時間線參照，
         // 播放被擋時要拿它來比對（脈衝剛成功卻擋掉音樂＝問題出在元素個體）
         lastPulseOK = Date.now();
         setPulseRate(PULSE_MS, "恢復正常"); // 只要成功一次就回到 4 分鐘
         pulseWait = Math.max(PULSE_WAIT_MIN, pulseWait - 200); // 成功就慢慢把等待收回來
-        logEvent("保連脈衝 #" + pulseN + " 已送出（" + (document.visibilityState === "visible" ? "前景" : "背景")
-          + (rider ? "，順帶熱身#" + rider._id : "") + "，等待 " + wait + "ms）");
+        // 例行成功只抽樣記錄：這一項每 4 分鐘固定產出兩行（脈衝＋麥克風重連）＝每天 720 行，
+        // 足以讓整份紀錄只涵蓋約 13 小時，把半夜真正發生的事擠出去。
+        // #N 是連號，跳號一望即知，不會誤以為漏跑；只要有一點不對勁就恢復每次都記
+        const vis = document.visibilityState === "visible";
+        const notable = pulseN <= 3 || pulseN % 10 === 0 || wasFailing
+          || wait !== PULSE_WAIT_MIN || vis !== lastPulseVis;
+        lastPulseVis = vis;
+        if (notable) logEvent("保連脈衝 #" + pulseN + " 已送出（" + (vis ? "前景" : "背景")
+          + (rider ? "，順帶熱身#" + rider._id : "") + "，等待 " + wait + "ms"
+          + (routineMicOff ? "，麥克風例行離線約 " + routineMicOff + " 秒" : "") + "）");
       }).catch(err => {
         pulseFails++;
         // 拉長「停麥克風→播放」的間隔再試：實測 800ms 有時不夠讓音訊工作階段轉換完成
