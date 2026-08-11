@@ -115,7 +115,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v73</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v74</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -290,7 +290,7 @@
   <div class="card">
     <div style="font-size:14px; font-weight:600; margin-bottom:8px">📋 事件紀錄（存在本機，重開網頁仍在）</div>
     <div id="logBox" style="font-family:ui-monospace,SFMono-Regular,monospace; font-size:12px; color:var(--muted); max-height:200px; overflow-y:auto; line-height:1.9; word-break:break-word"></div>
-    <div class="row" style="margin-top:10px"><button id="clearLogBtn" style="font-size:12px; padding:6px 12px">清除紀錄</button></div>
+    <div class="row" style="margin-top:10px"><button id="copyLogBtn" style="font-size:12px; padding:6px 12px">📋 複製全部紀錄</button><button id="clearLogBtn" style="font-size:12px; padding:6px 12px">清除紀錄</button></div>
   </div>
 
   <div class="card hint">
@@ -336,6 +336,38 @@
     try { localStorage.setItem("evlog", JSON.stringify(logArr)); } catch (e) {}
     renderLog();
   }
+  // 整份紀錄一鍵複製：在手機上長按拖曳選取幾百行幾乎不可能選對，而把紀錄貼出來
+  // 診斷是這個功能唯一的用途。標頭帶版本號與筆數——先前就發生過「這是哪一版的紀錄」
+  // 查不到而只能猜的情況（版本一律讀 verTag，不另外寫死）
+  $("copyLogBtn").addEventListener("click", () => {
+    const btn = $("copyLogBtn"), back = "📋 複製全部紀錄";
+    const flash = msg => { btn.textContent = msg; setTimeout(() => { btn.textContent = back; }, 2000); };
+    if (!logArr.length) { flash("（沒有紀錄）"); return; }
+    const t = new Date(), pad = n => (n < 10 ? "0" : "") + n;
+    // 順序與畫面一致（新的在上），也就是使用者一直以來貼出來的樣子
+    const text = "寶寶哭聲偵測 " + APP_VER + "｜共 " + logArr.length + " 筆｜複製於 "
+      + pad(t.getMonth() + 1) + "/" + pad(t.getDate()) + " " + pad(t.getHours()) + ":" + pad(t.getMinutes())
+      + "\n" + logArr.slice().reverse().join("\n");
+    const n = logArr.length;
+    // 舊瀏覽器／非安全來源的退路：暫時性 textarea＋execCommand，
+    // iOS 一定要 setSelectionRange 才選得到全部（select() 對它不夠）
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed; left:0; top:0; width:1px; height:1px; opacity:0";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { ta.setSelectionRange(0, text.length); } catch (e) {}
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+      flash(ok ? "✅ 已複製 " + n + " 筆" : "⚠️ 請改用長按複製");
+    };
+    // 字串已同步組好才呼叫，中間不 await，才不會失去點擊手勢的資格
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => flash("✅ 已複製 " + n + " 筆"), fallback);
+    } else fallback();
+  });
   // 清空要留痕：手動清除與自動淘汰造成的表象一模一樣（紀錄從半夜某個時間點才開始），
   // 沒有這一行就分不出「開頭為什麼不見了」，會害人把兩者搞混而誤判病因
   $("clearLogBtn").addEventListener("click", () => {
