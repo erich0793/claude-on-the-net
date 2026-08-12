@@ -82,6 +82,51 @@
   audio { width: 100%; margin-top: 10px; }
   .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
   a { color: var(--accent); }
+
+  /* —— 分頁：依「使用時機」分成每晚用／早上看／設定一次，避免把設定內容
+     每天晚上都滑過一遍。sticky 讓捲動時仍能切換 */
+  .tabs {
+    position: sticky; top: 0; z-index: 5;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    padding: 10px 0 12px; margin-bottom: 4px;
+    background: linear-gradient(var(--bg) 70%, transparent);
+  }
+  .tabs button {
+    position: relative; padding: 11px 8px; font-size: 14px; font-weight: 600;
+    color: var(--muted); background: var(--panel); border-radius: 12px;
+  }
+  .tabs button[aria-selected="true"] { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
+  /* 切到別的分頁時，警告不該被埋掉——監聽分頁按鈕上會亮一顆紅點 */
+  .tabs button .badge {
+    position: absolute; top: 6px; right: 8px; width: 9px; height: 9px;
+    border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px var(--danger); display: none;
+  }
+  .tabs button.warn .badge { display: block; }
+  .pane[hidden] { display: none; }
+
+  /* —— 哭鬧時間表：一列一天的 24 小時軸。幾天疊起來，作息規律會自己浮出來 */
+  .day { display: grid; grid-template-columns: 62px 1fr 46px; align-items: center; gap: 10px; padding: 5px 0; cursor: pointer; }
+  .day:hover .track { border-color: var(--accent); }
+  .day .dlabel { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .day .dcount { font-size: 12px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .track {
+    position: relative; height: 26px; border-radius: 7px;
+    background: #0b0f14; border: 1px solid var(--line); overflow: hidden; transition: .15s;
+  }
+  /* 6/12/18 時的刻度：用背景漸層畫，不必多加元素 */
+  .track::before {
+    content: ""; position: absolute; inset: 0;
+    background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--line) calc(25% - 1px) 25%);
+  }
+  .cry {
+    position: absolute; top: 50%; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px;
+    border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px rgba(77,171,247,.7);
+  }
+  .cry.bad { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+  .hours { display: grid; grid-template-columns: 62px 1fr 46px; gap: 10px; font-size: 10px; color: var(--muted); }
+  .hours div:nth-child(2) { display: flex; justify-content: space-between; }
+  .dayrows { font-size: 12px; color: var(--muted); line-height: 1.9; padding: 2px 0 8px 72px; }
+  .dayrows b { color: var(--text); font-variant-numeric: tabular-nums; }
   .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   a.btnlink { font-size: 13px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); text-decoration: none; white-space: nowrap; }
   a.btnlink:hover { border-color: var(--accent); }
@@ -102,6 +147,7 @@
   #miniBar .mtxt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #miniBar .mval { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; flex: none; }
   body.barred .wrap { padding-top: 56px; }
+  body.barred .tabs { top: 56px; } /* 狀態條是 fixed 的，分頁列要黏在它下面而不是被蓋住 */
 </style>
 
 <div id="miniBar">
@@ -115,78 +161,19 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v75</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v76</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
 
-  <div class="card">
-    <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
-    <div class="row">
-      <label class="file">📁 選擇音檔
-        <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac" />
-      </label>
-      <span class="tag" id="fileName">尚未選擇檔案</span>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <button id="testBtn" disabled>▶️ 試聽音檔</button>
-      <button id="manualBtn" disabled title="按下後選擇這次要播多久；不需偵測">🎵 手動播放</button>
-    </div>
-    <div id="manualMenu" style="display:none; margin-top:10px; padding:12px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2)">
-      <div class="hint" style="margin-bottom:8px; color:var(--text)">這次要播多久？<span class="muted">（偵測觸發的時長另外設定，不受影響）</span></div>
-      <div class="row" id="manualOpts">
-        <button data-m="once">播完一次</button>
-        <button data-m="1">1 分鐘</button>
-        <button data-m="3">3 分鐘</button>
-        <button data-m="5">5 分鐘</button>
-        <button data-m="10">10 分鐘</button>
-        <button data-m="30">30 分鐘</button>
-        <button data-m="60">60 分鐘</button>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <button id="manualCancel" style="font-size:12px; padding:6px 12px">取消</button>
-      </div>
-    </div>
-    <label class="hint" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-top:10px">
-      <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent); flex:none; margin-top:1px">
-      <span><b style="color:var(--text)">🎵→🎙️ 手動播放結束後自動開始偵測</b><br>音樂播完或按停止後，自動開麥克風接手站崗，不必再按「開始監聽」</span>
-    </label>
-    <details style="margin-top:10px">
-      <summary>⋯ 更多音檔選項（下載、清除、播放器）</summary>
-      <div class="row" style="margin-top:10px">
-        <button id="dlBtn" style="display:none">⬇️ 下載目前音檔</button>
-        <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
-        <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
-        <input type="file" id="anyFileInput" style="display:none" />
-      </div>
-      <audio id="player" controls preload="auto" x-webkit-airplay="allow" style="display:none"></audio>
-    </details>
-    <div class="hint" id="bigHint" style="display:none; margin-top:8px; color:var(--warn)">⚠️ 這個音檔偏大，長時間掛機時系統較容易回收它的資源（發生時會自動重建，但仍建議精簡）。用下方「✂️ 剪短音檔」取 60～120 秒並勾選「轉單聲道」即可大幅縮小。</div>
-    <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
-    <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
-
-    <details id="trimBox" style="display:none; margin-top:14px">
-      <summary>✂️ 剪短音檔（在你的裝置上處理，不會上傳）</summary>
-      <div style="height:10px"></div>
-      <div class="kv" style="margin:0 0 10px">
-        <span>目前音檔長度 <b id="origDur">讀取中…</b></span>
-        <span>大小 <b id="origSize">–</b></span>
-      </div>
-      <div class="row" style="font-size:14px">
-        從第 <input type="number" id="trimStart" value="0" min="0" style="width:70px; font:inherit; padding:6px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text)"> 秒開始，取
-        <input type="number" id="trimLen" value="60" min="1" max="300" style="width:70px; font:inherit; padding:6px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text)"> 秒
-        <label style="font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px"><input type="checkbox" id="trimMono" checked> 轉單聲道（檔案減半）</label>
-      </div>
-      <div class="hint" id="trimEst" style="margin-top:8px">剪出來大約 <b style="color:var(--text)">–</b>（輸出為未壓縮 WAV；越小越不容易被系統回收）</div>
-      <div class="row" style="margin-top:10px">
-        <button class="primary" id="trimBtn">✂️ 剪短並儲存</button>
-        <span class="hint" id="trimStatus"></span>
-      </div>
-    </details>
+  <div class="tabs">
+    <button id="tabWatch" aria-selected="true" data-pane="paneWatch">🎙️ 監聽<span class="badge"></span></button>
+    <button id="tabLog" aria-selected="false" data-pane="paneLog">📊 紀錄</button>
+    <button id="tabSet" aria-selected="false" data-pane="paneSet">⚙️ 設定</button>
   </div>
 
+  <div class="pane" id="paneWatch">
   <div class="card">
-    <div class="stept"><span class="stepn">2</span>開始監聽</div>
     <div class="status">
       <span class="dot" id="dot"></span>
       <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
@@ -222,7 +209,99 @@
   </div>
 
   <div class="card">
-    <div class="stept"><span class="stepn">3</span>設定（預設值可直接用，之後再微調）</div>
+    <div style="font-size:14px; font-weight:600; margin-bottom:10px">🎵 播放音樂（不需偵測）</div>
+    <div class="row">
+      <button id="testBtn" disabled>▶️ 試聽音檔</button>
+      <button id="manualBtn" disabled title="按下後選擇這次要播多久；不需偵測">🎵 手動播放</button>
+      <span class="tag" id="fileName">尚未選擇檔案</span>
+    </div>
+    <div id="manualMenu" style="display:none; margin-top:10px; padding:12px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2)">
+      <div class="hint" style="margin-bottom:8px; color:var(--text)">這次要播多久？<span class="muted">（偵測觸發的時長另外設定，不受影響）</span></div>
+      <div class="row" id="manualOpts">
+        <button data-m="once">播完一次</button>
+        <button data-m="1">1 分鐘</button>
+        <button data-m="3">3 分鐘</button>
+        <button data-m="5">5 分鐘</button>
+        <button data-m="10">10 分鐘</button>
+        <button data-m="30">30 分鐘</button>
+        <button data-m="60">60 分鐘</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="manualCancel" style="font-size:12px; padding:6px 12px">取消</button>
+      </div>
+    </div>
+    <label class="hint" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-top:10px">
+      <input type="checkbox" id="autoWatchCk" style="accent-color:var(--accent); flex:none; margin-top:1px">
+      <span><b style="color:var(--text)">🎵→🎙️ 手動播放結束後自動開始偵測</b><br>音樂播完或按停止後，自動開麥克風接手站崗，不必再按「開始監聽」</span>
+    </label>
+    <div class="hint" id="noFileHint" style="margin-top:10px">還沒有音檔——請到 <b style="color:var(--text)">⚙️ 設定</b> 分頁選一個。</div>
+  </div>
+  </div>
+
+  <div class="pane" id="paneLog" hidden>
+  <div class="card">
+    <div style="font-size:14px; font-weight:600; margin-bottom:4px">😢 哭鬧時間表</div>
+    <div class="hint" id="crySum" style="margin-bottom:12px">還沒有紀錄</div>
+    <div id="cryDays"></div>
+    <div class="hours" id="cryAxis" style="display:none; margin-top:6px"><div></div><div><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div><div></div></div>
+    <div class="row" style="margin-top:12px">
+      <button id="cryMoreBtn" style="font-size:12px; padding:6px 12px; display:none">顯示更多天</button>
+      <button id="cryClearBtn" style="font-size:12px; padding:6px 12px; display:none">清除時間表</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="font-size:14px; font-weight:600; margin-bottom:8px">📋 事件紀錄（存在本機，重開網頁仍在）</div>
+    <div id="logBox" style="font-family:ui-monospace,SFMono-Regular,monospace; font-size:12px; color:var(--muted); max-height:200px; overflow-y:auto; line-height:1.9; word-break:break-word"></div>
+    <div class="row" style="margin-top:10px"><button id="copyLogBtn" style="font-size:12px; padding:6px 12px">📋 複製全部紀錄</button><button id="clearLogBtn" style="font-size:12px; padding:6px 12px">清除紀錄</button></div>
+  </div>
+  </div>
+
+  <div class="pane" id="paneSet" hidden>
+  <div class="card">
+    <div class="stept"><span class="stepn">1</span>準備警報音檔（只需做一次，會自動記住）</div>
+    <div class="row">
+      <label class="file">📁 選擇音檔
+        <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac" />
+      </label>
+      <span class="tag" id="fileName2">尚未選擇檔案</span>
+    </div>
+    <details style="margin-top:10px">
+      <summary>⋯ 更多音檔選項（下載、清除、播放器）</summary>
+      <div class="row" style="margin-top:10px">
+        <button id="dlBtn" style="display:none">⬇️ 下載目前音檔</button>
+        <button id="forgetBtn" style="display:none">🗑️ 清除記住的音檔</button>
+        <button id="anyFileBtn" style="font-size:12px; padding:8px 12px">選不到檔案？改用不過濾的選擇器</button>
+        <input type="file" id="anyFileInput" style="display:none" />
+      </div>
+      <audio id="player" controls preload="auto" x-webkit-airplay="allow" style="display:none"></audio>
+    </details>
+    <div class="hint" id="bigHint" style="display:none; margin-top:8px; color:var(--warn)">⚠️ 這個音檔偏大，長時間掛機時系統較容易回收它的資源（發生時會自動重建，但仍建議精簡）。用下方「✂️ 剪短音檔」取 60～120 秒並勾選「轉單聲道」即可大幅縮小。</div>
+    <div class="hint" style="margin-top:8px">音檔只存在這台裝置的瀏覽器裡，不會上傳到任何地方；下次打開免重選。</div>
+    <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
+
+    <details id="trimBox" style="display:none; margin-top:14px">
+      <summary>✂️ 剪短音檔（在你的裝置上處理，不會上傳）</summary>
+      <div style="height:10px"></div>
+      <div class="kv" style="margin:0 0 10px">
+        <span>目前音檔長度 <b id="origDur">讀取中…</b></span>
+        <span>大小 <b id="origSize">–</b></span>
+      </div>
+      <div class="row" style="font-size:14px">
+        從第 <input type="number" id="trimStart" value="0" min="0" style="width:70px; font:inherit; padding:6px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text)"> 秒開始，取
+        <input type="number" id="trimLen" value="60" min="1" max="300" style="width:70px; font:inherit; padding:6px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text)"> 秒
+        <label style="font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px"><input type="checkbox" id="trimMono" checked> 轉單聲道（檔案減半）</label>
+      </div>
+      <div class="hint" id="trimEst" style="margin-top:8px">剪出來大約 <b style="color:var(--text)">–</b>（輸出為未壓縮 WAV；越小越不容易被系統回收）</div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="trimBtn">✂️ 剪短並儲存</button>
+        <span class="hint" id="trimStatus"></span>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="stept"><span class="stepn">2</span>設定（預設值可直接用，之後再微調）</div>
     <div class="sect">偵 測</div>
     <div class="ctl">
       <label style="display:flex; align-items:center; justify-content:flex-start; gap:8px; cursor:pointer">
@@ -287,14 +366,9 @@
     </details>
   </div>
 
-  <div class="card">
-    <div style="font-size:14px; font-weight:600; margin-bottom:8px">📋 事件紀錄（存在本機，重開網頁仍在）</div>
-    <div id="logBox" style="font-family:ui-monospace,SFMono-Regular,monospace; font-size:12px; color:var(--muted); max-height:200px; overflow-y:auto; line-height:1.9; word-break:break-word"></div>
-    <div class="row" style="margin-top:10px"><button id="copyLogBtn" style="font-size:12px; padding:6px 12px">📋 複製全部紀錄</button><button id="clearLogBtn" style="font-size:12px; padding:6px 12px">清除紀錄</button></div>
-  </div>
-
   <div class="card hint">
     <b style="color:var(--text)">隱私與運作</b>：麥克風的聲音只在這台裝置上即時分析，<b style="color:var(--text)">不錄音、不儲存、不上傳</b>；載入後斷網也能運作。觸發播放時會暫停偵測與麥克風，播完自動恢復。完整操作步驟、設定建議與疑難排解請見 <a href="guide.html">📖 使用說明</a>。
+  </div>
   </div>
 </div>
 
@@ -304,7 +378,11 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const startBtn = $("startBtn"), stopBtn = $("stopBtn"), testBtn = $("testBtn");
-  const fileInput = $("fileInput"), fileName = $("fileName"), player = $("player"), bigHint = $("bigHint");
+  const fileInput = $("fileInput"), player = $("player"), bigHint = $("bigHint");
+  // 檔名同時出現在「監聽」與「設定」兩個分頁，設定一次兩邊都更新；
+  // 沒有音檔時在監聽分頁指路到設定分頁，不讓人對著兩顆停用的按鈕發呆
+  const fileNameEls = [$("fileName"), $("fileName2")];
+  const fileName = { set textContent(v) { fileNameEls.forEach(e => { e.textContent = v; }); $("noFileHint").style.display = player.src ? "none" : ""; } };
   const dot = $("dot"), statusText = $("statusText"), statusSub = $("statusSub");
   const volBar = $("volBar"), scoreBar = $("scoreBar"), volVal = $("volVal"), scoreVal = $("scoreVal");
   const freqVal = $("freqVal"), ratioVal = $("ratioVal"), frameVal = $("frameVal"), condVal = $("condVal"), floorVal = $("floorVal"), f0Val = $("f0Val"), burstVal = $("burstVal");
@@ -375,6 +453,84 @@
     logEvent("📄 紀錄已清除");
   });
   renderLog();
+
+  // —— 哭鬧時間表：只記「偵測觸發」，不記手動播放（那是照顧者的動作，不是寶寶哭鬧）。
+  // 與事件紀錄分開存：事件紀錄是給人查故障的技術流水帳，會被例行心跳淘汰掉；
+  // 這裡要的是能留一個月、看得出作息規律的稀疏資料。
+  const CRY_DAYS = 30;
+  let cryArr = [];
+  try { cryArr = JSON.parse(localStorage.getItem("crylog") || "[]"); } catch (e) {}
+  let cryShowAll = false;
+  function crySave() {
+    const cut = Date.now() - CRY_DAYS * 86400000;
+    cryArr = cryArr.filter(c => c.t >= cut);
+    try { localStorage.setItem("crylog", JSON.stringify(cryArr)); } catch (e) {}
+    renderCry();
+  }
+  function cryAdd(why, f0) {
+    const rec = { t: Date.now(), why: why, f0: Math.round(f0 || 0), ok: null };
+    cryArr.push(rec);
+    crySave();
+    return rec; // 回傳讓呼叫端在播放塵埃落定後補寫 ok
+  }
+  const dayKey = t => { const d = new Date(t); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate(); };
+  function renderCry() {
+    const sum = $("crySum"), box = $("cryDays");
+    if (!cryArr.length) {
+      sum.textContent = "還沒有紀錄——偵測到哭聲並播放後，這裡會逐日累積。";
+      box.innerHTML = ""; $("cryAxis").style.display = "none";
+      $("cryMoreBtn").style.display = $("cryClearBtn").style.display = "none";
+      return;
+    }
+    // 依日分組（新的在上）
+    const byDay = {};
+    cryArr.forEach(c => { (byDay[dayKey(c.t)] = byDay[dayKey(c.t)] || []).push(c); });
+    const keys = Object.keys(byDay).sort().reverse();
+    const today = dayKey(Date.now()), yst = dayKey(Date.now() - 86400000);
+    const wk = cryArr.filter(c => c.t >= Date.now() - 7 * 86400000).length;
+    sum.innerHTML = "今天 <b style='color:var(--text)'>" + (byDay[today] || []).length + "</b> 次"
+      + "｜昨天 <b style='color:var(--text)'>" + (byDay[yst] || []).length + "</b> 次"
+      + "｜過去 7 天平均 <b style='color:var(--text)'>" + (wk / 7).toFixed(1) + "</b> 次/天";
+    const wd = ["日", "一", "二", "三", "四", "五", "六"];
+    const pad = n => (n < 10 ? "0" : "") + n;
+    const show = cryShowAll ? keys : keys.slice(0, 7);
+    box.innerHTML = show.map(k => {
+      const list = byDay[k].slice().sort((a, b) => a.t - b.t);
+      const d = new Date(list[0].t);
+      const dots = list.map(c => {
+        const x = new Date(c.t);
+        const pct = ((x.getHours() * 60 + x.getMinutes()) / 1440 * 100).toFixed(2);
+        // 沒播出來的用紅點：哪一晚失聰過會自己現形，不必再爬事件紀錄
+        return '<i class="cry' + (c.ok === false ? " bad" : "") + '" style="left:' + pct + '%"></i>';
+      }).join("");
+      const times = list.map(c => {
+        const x = new Date(c.t);
+        return "<b>" + pad(x.getHours()) + ":" + pad(x.getMinutes()) + "</b> " + c.why
+          + (c.ok === false ? " <span style='color:var(--danger)'>（沒播出來）</span>" : "");
+      }).join("　");
+      return '<div class="day" data-k="' + k + '">'
+        + '<span class="dlabel">' + (d.getMonth() + 1) + "/" + pad(d.getDate()) + "（" + wd[d.getDay()] + "）</span>"
+        + '<span class="track">' + dots + "</span>"
+        + '<span class="dcount">' + list.length + " 次</span></div>"
+        + '<div class="dayrows" data-rows="' + k + '" style="display:none">' + times + "</div>";
+    }).join("");
+    $("cryAxis").style.display = "";
+    $("cryClearBtn").style.display = "";
+    $("cryMoreBtn").style.display = keys.length > 7 ? "" : "none";
+    $("cryMoreBtn").textContent = cryShowAll ? "只顯示最近 7 天" : "顯示更多天（共 " + keys.length + " 天）";
+  }
+  $("cryDays").addEventListener("click", e => {
+    const row = e.target.closest(".day"); if (!row) return;
+    const r = $("cryDays").querySelector('[data-rows="' + row.dataset.k + '"]');
+    if (r) r.style.display = r.style.display === "none" ? "" : "none";
+  });
+  $("cryMoreBtn").addEventListener("click", () => { cryShowAll = !cryShowAll; renderCry(); });
+  $("cryClearBtn").addEventListener("click", () => {
+    cryArr = []; localStorage.removeItem("crylog"); renderCry();
+    logEvent("📄 哭鬧時間表已清除");
+  });
+  renderCry();
+
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
   const APP_VER = $("verTag").textContent.trim(); // 版本號只寫在畫面上那一處，其他都引用它
@@ -838,8 +994,25 @@
   }
 
   const miniBar = $("miniBar"), miniDot = $("miniDot"), miniTxt = $("miniTxt"), miniVal = $("miniVal");
-  miniBar.addEventListener("click", () => dot.scrollIntoView({ behavior: "smooth", block: "center" })); // 點頂端狀態條可跳回狀態卡片
+  // 點頂端狀態條回到監聽分頁的狀態卡片（可能正在別的分頁，要先切回來）
+  miniBar.addEventListener("click", () => { showPane("paneWatch"); dot.scrollIntoView({ behavior: "smooth", block: "center" }); });
+  // —— 分頁：依使用時機分成「每晚用／早上看／設定一次」。
+  // 一律從監聽分頁開始，不記憶上次位置——半夜重新載入時該看到的是狀態，不是設定。
+  const tabBtns = [].slice.call(document.querySelectorAll(".tabs button"));
+  function showPane(id) {
+    tabBtns.forEach(b => {
+      const on = b.dataset.pane === id;
+      b.setAttribute("aria-selected", on ? "true" : "false");
+      $(b.dataset.pane).hidden = !on;
+      if (on) b.classList.remove("warn"); // 看過就把紅點收掉
+    });
+    window.scrollTo({ top: 0 });
+  }
+  tabBtns.forEach(b => b.addEventListener("click", () => showPane(b.dataset.pane)));
+
   function setStatus(state, main, sub) {
+    // 警告不能因為使用者正在別的分頁就被埋掉——在監聽分頁的按鈕上亮一顆紅點
+    if (state === "alert" && $("paneWatch").hidden) $("tabWatch").classList.add("warn");
     dot.className = "dot" + (state ? " " + state : "");
     statusText.firstChild.textContent = main;
     statusSub.textContent = sub || "";
@@ -1656,6 +1829,9 @@
       const mins = minsOverride || playDur.value;
       const isManual = reason === "手動播放";
       lastAlertManual = isManual; // 播完後要判斷該不該自動接手站崗
+      // 哭鬧時間表只記偵測觸發：手動播放是照顧者的動作，不是寶寶哭鬧。
+      // ok 先留空，等這一輪播放塵埃落定再補寫（成功／只剩嗶聲）
+      const cryRec = isManual ? null : cryAdd(reason || "偵測", burstF0 || (stat && stat.bestF0) || 0);
       const head = isManual ? "手動播放" : "偵測到哭聲！";
       // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽。
       // 淡出僅手動播放嘗試：警報無手勢、淡出引擎必被 iOS 拒絕（實測 100%），
@@ -1725,7 +1901,10 @@
         const tryPlay = el2 => {
           const pr = el2.play();
           if (!pr) { playStarted = true; return; }
-          pr.then(() => { playStarted = true; blockedRun = 0; }).catch(err => {
+          pr.then(() => {
+            playStarted = true; blockedRun = 0;
+            if (cryRec && cryRec.ok === null) { cryRec.ok = true; crySave(); }
+          }).catch(err => {
             logEvent("⚠️ 播放被瀏覽器阻擋（" + ((err && err.name) || "未知") + "｜" + elTag(el2)
               + " " + (document.visibilityState === "visible" ? "前景" : "背景")
               + "｜" + keepState()
@@ -1753,6 +1932,7 @@
         const giveUp = () => {
             // 全部試完都不行——絕不能卡死在無聲的警報狀態：收尾、恢復監聽、嗶聲警示
             blockedRun++;
+            if (cryRec) { cryRec.ok = false; crySave(); } // 時間表上這一次會是紅點
             logEvent("⚠️ 已連續 " + blockedRun + " 次觸發無法播放，改以嗶聲警示");
             stopAlert(true);
             cooldownUntil = performance.now() + 8000;
