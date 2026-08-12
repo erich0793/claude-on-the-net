@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v77</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v78</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -668,7 +668,7 @@
     const mins = b.dataset.m;
     localStorage.setItem("manualDur", mins);
     showManualMenu(false);
-    topUpPool(); // 趁這次手勢補滿警報元素池
+    unlockAll(); // 趁這次手勢把池、熱身、保連音軌一起解鎖——播完可能會自動接手站崗（無手勢）
     if (player.src && !alerting) trigger("手動播放", mins);
   });
   $("manualCancel").addEventListener("click", () => showManualMenu(false));
@@ -920,7 +920,7 @@
     return new Blob([data.buffer], { type: "audio/wav" });
   }
   testBtn.addEventListener("click", () => {
-    topUpPool(); // 趁手勢補滿警報元素池
+    unlockAll(); // 趁手勢把池、熱身、保連音軌一起解鎖
     // 播放中（不論試聽或警報）按下一律停止；警報的善後由 pause 事件處理
     const el = curEl();
     if (!el.paused) {
@@ -1173,6 +1173,8 @@
     // 只在真的快見底時才補（過去只要少一顆就補，等於每次碰畫面都來一次
     // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿
     if (running && player.src && elPool.length <= 4) { topUpPool(); unlockWarm(); }
+    // 保連音軌若還沒被任何手勢解鎖過，任何一次碰畫面都該補上——這是使用者能自救的最短路徑
+    if (keepCk.checked && !keeperGestureOK) unlockKeeper();
   }, true);
 
   // 註：#player 不再需要預解鎖——警報／手動播放走池元素（以無聲小檔解鎖），
@@ -1464,12 +1466,19 @@
     return keeper;
   }
   // 在使用者手勢內先解鎖保連音軌，之後的定時／程式播放才不會被 iOS 擋下
+  let keeperGestureOK = false; // 保連音軌這次頁面載入以來，有沒有真的在手勢裡解鎖成功過
   function unlockKeeper() {
     ensureKeeper();
     keeper.muted = true;
     const p = keeper.play();
-    if (p) p.then(() => { keeper.pause(); keeper.muted = false; }).catch(() => { keeper.muted = false; });
+    if (p) p.then(() => { keeper.pause(); keeper.muted = false; keeperGestureOK = true; })
+            .catch(() => { keeper.muted = false; });
   }
+  // 每一個使用者手勢都該把三種元素一起解鎖。08/12 的藍牙斷線就是敗在這裡：
+  // 手動播放的手勢只補了元素池，沒碰保連音軌；接著「播完自動開始偵測」是計時器
+  // 呼叫 start()，那時已經沒有手勢，保連音軌整晚沒有無手勢播放權，脈衝 100% 被擋。
+  // 手勢很珍貴，能一次解鎖就別漏掉任何一種
+  function unlockAll() { unlockKeeper(); unlockWarm(); topUpPool(); }
   // —— 保連音軌的「不碰麥克風」保鮮：換成無聲小檔、靜音、不動麥克風播 200ms。
   //
   // 【這不是解方，是診斷工具——別再把它當成修復手段】
@@ -1660,7 +1669,8 @@
         const grew = pulseWait < PULSE_WAIT_MAX;
         if (grew) pulseWait = Math.min(PULSE_WAIT_MAX, pulseWait + 800);
         logEvent("⚠️ 保連脈衝被瀏覽器阻擋（" + ((err && err.name) || "未知") + "，等待 " + wait + "ms，累計 " + pulseFails + " 次）"
-          + (grew ? "──下次改等 " + pulseWait + "ms" : ""));
+          + (grew ? "──下次改等 " + pulseWait + "ms" : "")
+          + (keeperGestureOK ? "" : "｜⚠️ 保連音軌本次載入以來未經手勢解鎖，請碰一下畫面或重按「開始監聽」"));
         // 連續被擋只退避、不停用——中斷麥克風的成本降低即可，
         // 停用會讓熱身元素永遠不再刷新（見本函式上方註解）
         if (pulseFails >= 2) setPulseRate(PULSE_BACKOFF_MS, "連續被擋，改為低頻重試");
@@ -1693,7 +1703,10 @@
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
     keepSuspended = false; // 使用者親手改動＝重新表達意圖，清掉系統的暫停
-    if (keepCk.checked && running) { unlockKeeper(); keeperOn(); } else keeperOff();
+    // 勾選這個動作本身就是使用者手勢，是解鎖保連音軌最好的時機。
+    // 舊寫法只在 running 時解鎖，於是「先勾選、之後才開始監聽」這條路徑
+    // 永遠拿不到播放權——實測整晚脈衝全被擋就是這樣來的
+    if (keepCk.checked) { unlockKeeper(); if (running) keeperOn(); } else keeperOff();
     paintKeepState();
     logEvent(keepCk.checked ? "已開啟保持音響連線" : "已關閉保持音響連線");
   });
@@ -1832,7 +1845,8 @@
         // 哄睡音樂播完（或被按停）就自動接手站崗。元素池在按下手動播放時已於
         // 手勢內補滿，麥克風權限也已是「允許」，所以這裡不需要新的手勢；
         // 萬一 iOS 仍拒絕，start() 內建的逾時會把按鈕交還給使用者
-        logEvent("手動播放結束，依設定自動開始偵測");
+        logEvent("手動播放結束，依設定自動開始偵測"
+          + (keepCk.checked && !keeperGestureOK ? "──⚠️ 保連音軌尚未解鎖，請碰一下畫面" : ""));
         setStatus("", "播放結束", "依設定自動開始偵測…");
         setTimeout(() => { if (!running) start(); }, 1500); // 等元素釋放與音訊工作階段落定
       } else {
