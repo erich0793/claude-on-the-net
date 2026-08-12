@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v76</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v77</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -356,7 +356,7 @@
         <input type="checkbox" id="keepCk" style="accent-color:var(--accent)">
         <span><b>🔗 保持音響連線</b>（接音響時建議開啟）</span>
       </label>
-      <div class="hint" style="margin-top:4px; padding-left:26px">每 4 分鐘向音響發送 5 秒聽不見的訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機。</div>
+      <div class="hint" style="margin-top:4px; padding-left:26px">每 4 分鐘向音響發送 5 秒聽不見的訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機。<b id="keepStateTxt" style="display:block; margin-top:4px"></b></div>
     </div>
     <details style="margin-top:16px">
       <summary>🧠 偵測原理</summary>
@@ -1237,6 +1237,7 @@
     if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
 
     running = true; cryMs = 0; lastT = performance.now();
+    paintKeepState(); // keeperOn() 跑在 await 之前，那時 running 還是 false，要補畫一次
     calUntil = lastT + 3000;
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
@@ -1433,6 +1434,7 @@
   // 讓 AirPlay／藍牙路由與音響不因閒置而斷線或自動關機
   const keepCk = $("keepCk");
   keepCk.checked = localStorage.getItem("keepalive") === "1";
+  setTimeout(paintKeepState, 0); // 一載入就把實際狀態畫出來
   // 脈衝式保連：麥克風開啟期間 iOS 不會把任何網頁聲音送往藍牙／AirPlay（都留在手機），
   // 連續播放保連音是無效的。改為每 4 分鐘短暫釋放麥克風 3 秒、把保連訊號真正送到音響，
   // 再自動收回麥克風繼續監聽。
@@ -1531,8 +1533,12 @@
     });
   }
   const PULSE_MS = 240000, PULSE_BACKOFF_MS = 1200000; // 正常 4 分鐘；連續失敗退避到 20 分鐘
+  // 「本次監聽暫停」與「使用者關掉」是兩回事：勾選框永遠代表使用者的意圖，
+  // 這個旗標只代表系統在這一次監聽裡放棄了，每次重新開始監聽都歸零再試一次
+  let keepSuspended = false;
   function keeperOn() {
     if (!keepCk.checked) return;
+    keepSuspended = false; // 重新開始監聽＝重新給它一次機會
     ensureKeeper();
     pulseFails = 0;
     // 「本次開啟以來一次都沒成功」的四振出局要以**這次監聽**為範圍，訊息才誠實。
@@ -1541,11 +1547,13 @@
     if (!keepTimer) {
       pulseEvery = PULSE_MS;
       keepTimer = setInterval(keepPulse, pulseEvery);
+      paintKeepState();
       logEvent("保持連線：每 4 分鐘向音響發送 5 秒保連訊號");
     }
   }
   function keeperOff() {
     if (keepTimer) { clearInterval(keepTimer); keepTimer = null; }
+    setTimeout(paintKeepState, 0);
     pulsing = false;
     if (keeper) keeper.pause();
   }
@@ -1557,6 +1565,7 @@
     clearInterval(keepTimer);
     pulseEvery = ms;
     keepTimer = setInterval(keepPulse, ms);
+    paintKeepState();
     logEvent("保連脈衝改為每 " + Math.round(ms / 60000) + " 分鐘（" + why + "）");
   }
   let pulseN = 0;
@@ -1662,17 +1671,20 @@
         // 這個頁面「從來沒有成功過一次」時，四次就夠證明這台裝置吃不下保連訊號；
         // 再試下去只是每 20 分鐘賠上一次麥克風空窗。曾經成功過才適用寬鬆的 10 次
         if (pulseFails >= 4 && !lastPulseOK && keepCk.checked) {
-          keepCk.checked = false; localStorage.setItem("keepalive", "0");
-          keeperOff();
-          logEvent("⚠️ 保連訊號連 4 次都送不出去（本次開啟以來一次都沒成功），已關閉「保持音響連線」──偵測與播放不受影響");
-          if (running && !alerting) setStatus("alert", "保持音響連線已自動關閉", "這台裝置擋下所有保連訊號；哭聲偵測與播放照常運作");
+          // 只暫停「這一次監聽」，不寫進 localStorage——同一台裝置實測會整晚 191 次
+          // 全成功、也會從第一次就全滅，用一晚的失敗永久關掉它，代價是之後每一晚
+          // 音響都沒有保連訊號而閒置斷線，而且使用者完全不會知道
+          keepSuspended = true;
+          keeperOff(); paintKeepState();
+          logEvent("⚠️ 保連訊號連 4 次都送不出去（本次監聽以來一次都沒成功），已暫停「保持音響連線」──偵測與播放不受影響，下次開始監聽會再試一次");
+          if (running && !alerting) setStatus("alert", "保持音響連線已暫停", "這台裝置目前擋下所有保連訊號；哭聲偵測與播放照常運作");
         }
         if (pulseFails >= 10 && keepCk.checked) {
           // 真的完全不行了才收手，但一定要讓畫面誠實反映：勾選同步取消
-          keepCk.checked = false; localStorage.setItem("keepalive", "0");
-          keeperOff();
-          logEvent("⚠️ 保連脈衝連續失敗 10 次，已關閉「保持音響連線」（勾選同步取消）");
-          if (running && !alerting) setStatus("alert", "保持音響連線已自動關閉", "系統持續拒絕保連訊號；音響可能會閒置斷線");
+          keepSuspended = true;
+          keeperOff(); paintKeepState();
+          logEvent("⚠️ 保連脈衝連續失敗 10 次，已暫停「保持音響連線」──下次開始監聽會再試一次");
+          if (running && !alerting) setStatus("alert", "保持音響連線已暫停", "系統持續拒絕保連訊號；音響可能會閒置斷線");
         }
       });
     }, wait);
@@ -1680,7 +1692,9 @@
   }
   keepCk.addEventListener("change", () => {
     localStorage.setItem("keepalive", keepCk.checked ? "1" : "0");
+    keepSuspended = false; // 使用者親手改動＝重新表達意圖，清掉系統的暫停
     if (keepCk.checked && running) { unlockKeeper(); keeperOn(); } else keeperOff();
+    paintKeepState();
     logEvent(keepCk.checked ? "已開啟保持音響連線" : "已關閉保持音響連線");
   });
 
@@ -1712,7 +1726,10 @@
     const p = w.play();
     const restore = () => { try { w.pause(); } catch (e) {} w.src = back; w._real = real; w.muted = false; };
     if (p) p.then(() => {
-      freshN++; lastFreshOK = lastWarmOK = Date.now(); w._unlockOK = true;
+      // 注意：這裡**不能**更新 lastWarmOK。那個時戳的語意是「別人（保連順帶刷新）
+      // 有沒有在照顧熱身元素」，是本函式要不要出手的依據；把自己的成功也記進去，
+      // 下一輪就會誤以為有人剛刷過而跳過，實測變成每 8 分鐘才跑一次（應為 4 分鐘）
+      freshN++; lastFreshOK = Date.now(); w._unlockOK = true;
       setTimeout(restore, 200);
       if (freshN <= 3 || freshN % 10 === 0) logEvent("🫧 保鮮脈衝 #" + freshN + "（熱身#" + w._id + "）");
     }).catch(err => {
@@ -1752,8 +1769,21 @@
   // 保連此刻的「實際」狀態，不是勾選狀態——08/08 那晚兩者不一致整整 11 小時
   function keepState() {
     if (!keepCk.checked) return "保連關";
-    if (!keepTimer) return "保連已停用";
+    if (keepSuspended) return "保連本次已暫停";
+    if (!keepTimer) return running ? "保連已停用" : "保連待命";
     return pulseEvery === PULSE_MS ? "保連運作中" : "保連退避中";
+  }
+  // 把保連的「實際」狀態畫在勾選框旁邊。08/12 藍牙斷線就是敗在這裡：
+  // 前一晚被自動停用後永久寫進 localStorage，勾選框看起來還在、實際整晚沒發過訊號，
+  // 使用者要等到音響真的斷線才會發現。狀態一定要能直接看見，不能只寫在紀錄裡
+  function paintKeepState() {
+    const el = $("keepStateTxt"); if (!el) return;
+    if (!keepCk.checked) { el.textContent = ""; return; }
+    if (keepSuspended) { el.textContent = "⚠️ 目前暫停中——這台裝置擋下保連訊號，下次開始監聽會再試"; el.style.color = "var(--warn)"; return; }
+    if (!running) { el.textContent = "待命中——開始監聽後才會發送"; el.style.color = "var(--muted)"; return; }
+    if (!keepTimer) { el.textContent = "⚠️ 未在發送"; el.style.color = "var(--warn)"; return; }
+    el.textContent = pulseEvery === PULSE_MS ? "✅ 運作中（每 4 分鐘）" : "低頻重試中（每 20 分鐘）";
+    el.style.color = pulseEvery === PULSE_MS ? "var(--ok)" : "var(--warn)";
   }
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
   let calUntil = 0;      // 開始監聽後的校準期：快速學習背景噪音，期間不觸發
