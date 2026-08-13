@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v78</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v79</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -356,7 +356,24 @@
         <input type="checkbox" id="keepCk" style="accent-color:var(--accent)">
         <span><b>🔗 保持音響連線</b>（接音響時建議開啟）</span>
       </label>
-      <div class="hint" style="margin-top:4px; padding-left:26px">每 4 分鐘向音響發送 5 秒聽不見的訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機。<b id="keepStateTxt" style="display:block; margin-top:4px"></b></div>
+      <div class="hint" style="margin-top:4px; padding-left:26px">定時向音響發送 5 秒聽不見的訊號（期間短暫暫停偵測），防止藍牙／AirPlay 閒置斷線或音響自動關機。<b id="keepStateTxt" style="display:block; margin-top:4px"></b></div>
+      <div class="ctl" style="margin-top:10px; padding-left:26px">
+        <label><span>發送間隔</span></label>
+        <select id="keepEvery" style="width:100%; font:inherit; padding:8px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
+          <option value="120000">每 2 分鐘（音響很快就睡著時選這個）</option>
+          <option value="240000">每 4 分鐘（預設）</option>
+          <option value="480000">每 8 分鐘（省電，偵測中斷更少）</option>
+        </select>
+        <div class="hint" style="margin-top:4px">每次發送會讓麥克風離線約 6 秒。間隔越短越不容易斷線，但聽不見寶寶的空窗也越多。</div>
+      </div>
+      <div class="ctl" style="margin-top:10px; padding-left:26px">
+        <label><span>訊號種類</span></label>
+        <select id="keepTone" style="width:100%; font:inherit; padding:8px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
+          <option value="17500">17.5kHz 高頻（預設，成人與多數人聽不到）</option>
+          <option value="45">45Hz 低頻（藍牙壓縮不會吃掉它；小喇叭多半放不出來）</option>
+        </select>
+        <div class="hint" style="margin-top:4px"><b style="color:var(--text)">脈衝每次都成功、音響卻還是睡著時，換這個試試</b>：藍牙的音訊壓縮常在 16kHz 附近就截掉，17.5kHz 可能根本沒送到喇叭，它收到的等於一片安靜。低頻能通過壓縮；若喇叭有重低音而聽得到悶響，就換回高頻。</div>
+      </div>
     </div>
     <details style="margin-top:16px">
       <summary>🧠 偵測原理</summary>
@@ -1446,7 +1463,7 @@
     if (_keepUrl) return _keepUrl; // 熱身元素與保連音軌共用同一份，且警報後要換回來
     // 極微弱 17.5kHz 正弦波：成人聽不到，且完全在偵測分析頻帶之外（不會自我觸發）；
     // 對音響是「持續有內容」的訊號——純無聲會觸發許多音響的自動關機
-    const sr = 44100, n = sr * 10, amp = 1300, f = 17500;
+    const sr = 44100, n = sr * 10, amp = 1300, f = keepToneHz();
     const b = new DataView(new ArrayBuffer(44 + n * 2));
     const w8 = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
     w8(0, "RIFF"); b.setUint32(4, 36 + n * 2, true); w8(8, "WAVE"); w8(12, "fmt ");
@@ -1456,6 +1473,16 @@
     for (let i = 0; i < n; i++) b.setInt16(44 + i * 2, Math.round(amp * Math.sin(2 * Math.PI * f * i / sr)), true);
     _keepUrl = URL.createObjectURL(new Blob([b.buffer], { type: "audio/wav" }));
     return _keepUrl;
+  }
+  function keepToneHz() { return +(localStorage.getItem("keepTone") || 17500); }
+  // 換訊號種類：丟掉快取的 wav，把保連音軌與所有還沒被徵用的熱身元素換到新訊號。
+  // 換 src 不影響已取得的播放授權（實測確認），所以可以隨時切換
+  function rebuildKeepTone() {
+    if (_keepUrl) { const old = _keepUrl; _keepUrl = null; setTimeout(() => URL.revokeObjectURL(old), 3000); }
+    const url = keepWavUrl();
+    if (keeper && keeper.paused) keeper.src = url;
+    warmEls.forEach(w => { if (!w._inUse && !w._real && w.paused) w.src = url; });
+    logEvent("🔧 保連訊號已改為 " + keepToneHz() + "Hz");
   }
   function ensureKeeper() {
     if (!keeper) {
@@ -1541,7 +1568,11 @@
              .catch(err => { w.muted = false; w._unlockErr = (err && err.name) || "未知"; });
     });
   }
-  const PULSE_MS = 240000, PULSE_BACKOFF_MS = 1200000; // 正常 4 分鐘；連續失敗退避到 20 分鐘
+  // 間隔可調：不同音響的閒置逾時差很多，而網頁量不到那個門檻——只能讓使用者實測
+  const EVERY_OK = [120000, 240000, 480000]; // 允許的間隔（與選單一致），擋掉壞掉的儲存值
+  let PULSE_MS = +(localStorage.getItem("keepEvery") || 240000);
+  if (EVERY_OK.indexOf(PULSE_MS) < 0) PULSE_MS = 240000;
+  const PULSE_BACKOFF_MS = 1200000; // 連續失敗退避到 20 分鐘
   // 「本次監聽暫停」與「使用者關掉」是兩回事：勾選框永遠代表使用者的意圖，
   // 這個旗標只代表系統在這一次監聽裡放棄了，每次重新開始監聽都歸零再試一次
   let keepSuspended = false;
@@ -1557,7 +1588,7 @@
       pulseEvery = PULSE_MS;
       keepTimer = setInterval(keepPulse, pulseEvery);
       paintKeepState();
-      logEvent("保持連線：每 4 分鐘向音響發送 5 秒保連訊號");
+      logEvent("保持連線：每 " + Math.round(PULSE_MS / 60000) + " 分鐘向音響發送 5 秒保連訊號（" + keepToneHz() + "Hz）");
     }
   }
   function keeperOff() {
@@ -1710,6 +1741,25 @@
     paintKeepState();
     logEvent(keepCk.checked ? "已開啟保持音響連線" : "已關閉保持音響連線");
   });
+  const keepEvery = $("keepEvery"), keepTone = $("keepTone");
+  keepEvery.value = String(PULSE_MS);
+  if (keepEvery.selectedIndex < 0) keepEvery.value = "240000"; // 只修畫面，實際間隔由上面驗過
+  keepEvery.addEventListener("change", () => {
+    PULSE_MS = +keepEvery.value;
+    localStorage.setItem("keepEvery", keepEvery.value);
+    logEvent("保連間隔改為每 " + Math.round(PULSE_MS / 60000) + " 分鐘");
+    // 用新的間隔重開兩個計時器（保鮮脈衝沿用同一個節奏）
+    if (keepTimer) { clearInterval(keepTimer); keepTimer = null; pulseEvery = PULSE_MS; keeperOn(); }
+    if (freshTimer) { clearInterval(freshTimer); freshTimer = null; freshOn(); }
+    paintKeepState();
+  });
+  keepTone.value = String(keepToneHz());
+  if (keepTone.selectedIndex < 0) keepTone.value = "17500";
+  keepTone.addEventListener("change", () => {
+    localStorage.setItem("keepTone", keepTone.value);
+    rebuildKeepTone();
+    unlockKeeper(); // 這是使用者手勢，順便把換過 src 的音軌再解鎖一次
+  });
 
   // —— 無聲保鮮脈衝：維持頁面的「無手勢播放權限」，與保持音響連線完全脫鉤。
   // 08/08 的教訓：熱身元素的保鮮 100% 掛在保連脈衝上，保連一停（自我停用、
@@ -1795,7 +1845,9 @@
     if (keepSuspended) { el.textContent = "⚠️ 目前暫停中——這台裝置擋下保連訊號，下次開始監聽會再試"; el.style.color = "var(--warn)"; return; }
     if (!running) { el.textContent = "待命中——開始監聽後才會發送"; el.style.color = "var(--muted)"; return; }
     if (!keepTimer) { el.textContent = "⚠️ 未在發送"; el.style.color = "var(--warn)"; return; }
-    el.textContent = pulseEvery === PULSE_MS ? "✅ 運作中（每 4 分鐘）" : "低頻重試中（每 20 分鐘）";
+    el.textContent = pulseEvery === PULSE_MS
+      ? "✅ 運作中（每 " + Math.round(PULSE_MS / 60000) + " 分鐘，" + keepToneHz() + "Hz）"
+      : "低頻重試中（每 " + Math.round(pulseEvery / 60000) + " 分鐘）";
     el.style.color = pulseEvery === PULSE_MS ? "var(--ok)" : "var(--warn)";
   }
   let cooldownUntil = 0; // 手動停止後的冷靜期：暫不重新觸發，讓照顧者安撫
