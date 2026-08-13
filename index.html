@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v79</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v80</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1693,7 +1693,8 @@
         lastPulseVis = vis;
         if (notable) logEvent("保連脈衝 #" + pulseN + " 已送出（" + (vis ? "前景" : "背景")
           + (rider ? "，順帶熱身#" + rider._id : "") + "，等待 " + wait + "ms"
-          + (routineMicOff ? "，麥克風例行離線約 " + routineMicOff + " 秒" : "") + "）");
+          + (routineMicOff ? "，麥克風例行離線約 " + routineMicOff + " 秒" : "")
+          + "，距上次音樂 " + drySpell() + "）");
       }).catch(err => {
         pulseFails++;
         // 拉長「停麥克風→播放」的間隔再試：實測 800ms 有時不夠讓音訊工作階段轉換完成
@@ -1827,6 +1828,15 @@
 
   let alertTimer = null;
   let lastAlertManual = false; // 這一輪播放是不是「手動播放」（決定播完要不要自動接手站崗）
+  // 上一次「真的有音樂送出去」的時戳。08/13 的比對顯示：沒斷線的夜晚寶寶大約每小時
+  // 哭一次、音樂就播一次；斷線那晚有 3 小時 37 分完全沒有音樂，只剩保連脈衝。
+  // 兩晚的保連紀錄一模一樣，所以差異只可能在這裡——把它寫進紀錄才有辦法驗證
+  let lastRealAudioAt = 0;
+  function drySpell() {
+    if (!lastRealAudioAt) return "尚未播放過";
+    const m = (Date.now() - lastRealAudioAt) / 60000;
+    return m < 90 ? Math.round(m) + " 分鐘" : (m / 60).toFixed(1) + " 小時";
+  }
   let blockedRun = 0;          // 連續幾次觸發完全播不出來（整晚只剩嗶聲要看得見）
   let lastDeadWarn = 0;        // 「備援全滅」的警告節流，每 10 分鐘最多一次
   // 保連此刻的「實際」狀態，不是勾選狀態——08/08 那晚兩者不一致整整 11 小時
@@ -1952,10 +1962,12 @@
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
+      const dryBefore = drySpell(); // 先讀：等一下播放成功會把時戳歸零
       logEvent("🔊 觸發播放（" + (reason || "手動")
         + (el === player ? "，共用播放器"
            : el._origin === "熱身" ? "，熱身元素#" + el._id
-           : "，新元素#" + el._id + "，池餘 " + elPool.length) + "）");
+           : "，新元素#" + el._id + "，池餘 " + elPool.length)
+        + "，距上次音樂 " + dryBefore + "）");
       if (mins !== "once") {
         el.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
@@ -1999,6 +2011,7 @@
           if (!pr) { playStarted = true; return; }
           pr.then(() => {
             playStarted = true; blockedRun = 0;
+            lastRealAudioAt = Date.now(); // 真的有音樂送到喇叭了
             if (cryRec && cryRec.ok === null) { cryRec.ok = true; crySave(); }
           }).catch(err => {
             logEvent("⚠️ 播放被瀏覽器阻擋（" + ((err && err.name) || "未知") + "｜" + elTag(el2)
