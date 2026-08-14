@@ -104,7 +104,7 @@
   .tabs button.warn .badge { display: block; }
   .pane[hidden] { display: none; }
 
-  /* —— 哭鬧時間表：一列一天的 24 小時軸。幾天疊起來，作息規律會自己浮出來 */
+  /* —— 哭泣時間表：一列一天的 24 小時軸。幾天疊起來，作息規律會自己浮出來 */
   .day { display: grid; grid-template-columns: 62px 1fr 46px; align-items: center; gap: 10px; padding: 5px 0; cursor: pointer; }
   .day:hover .track { border-color: var(--accent); }
   .day .dlabel { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v80</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v81</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -240,7 +240,7 @@
 
   <div class="pane" id="paneLog" hidden>
   <div class="card">
-    <div style="font-size:14px; font-weight:600; margin-bottom:4px">😢 哭鬧時間表</div>
+    <div style="font-size:14px; font-weight:600; margin-bottom:4px">😢 哭泣時間表</div>
     <div class="hint" id="crySum" style="margin-bottom:12px">還沒有紀錄</div>
     <div id="cryDays"></div>
     <div class="hours" id="cryAxis" style="display:none; margin-top:6px"><div></div><div><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div><div></div></div>
@@ -471,13 +471,19 @@
   });
   renderLog();
 
-  // —— 哭鬧時間表：只記「偵測觸發」，不記手動播放（那是照顧者的動作，不是寶寶哭鬧）。
+  // —— 哭泣時間表：只記「持續哭聲」這一種觸發。手動播放是照顧者的動作，
+  // 哀叫（短聲達標）則因為次數太多會把作息圖洗成噪音——兩者都不進表。
   // 與事件紀錄分開存：事件紀錄是給人查故障的技術流水帳，會被例行心跳淘汰掉；
   // 這裡要的是能留一個月、看得出作息規律的稀疏資料。
   const CRY_DAYS = 30;
+  const CRY_REASON = "持續哭聲"; // 時間表只採計這一種觸發原因（哀叫不算）
   let cryArr = [];
   try { cryArr = JSON.parse(localStorage.getItem("crylog") || "[]"); } catch (e) {}
   let cryShowAll = false;
+  // 本次監聽的最長無音樂空窗；只在監聽中累計，停止期間不算。
+  // 必須宣告在這裡：renderCry() 在頁面載入時就會讀它，放到播放區才宣告會踩到
+  // let 的暫時性死區，整個時間表會靜靜地不渲染（實測就是這樣壞掉的）
+  let maxDry = 0;
   function crySave() {
     const cut = Date.now() - CRY_DAYS * 86400000;
     cryArr = cryArr.filter(c => c.t >= cut);
@@ -493,21 +499,27 @@
   const dayKey = t => { const d = new Date(t); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate(); };
   function renderCry() {
     const sum = $("crySum"), box = $("cryDays");
-    if (!cryArr.length) {
-      sum.textContent = "還沒有紀錄——偵測到哭聲並播放後，這裡會逐日累積。";
+    // 舊資料混著哀叫，一併濾掉才不會前後不一致（不刪除，只是不畫）
+    const cries = cryArr.filter(c => c.why === CRY_REASON);
+    // 這個數字決定「保連訊號到底有沒有用」的實驗：要超過上次出事的長度才算通過
+    const dry = maxDry ? "｜本次監聽最長無音樂 <b style='color:var(--text)'>" + fmtDry(maxDry) + "</b>" : "";
+    if (!cries.length) {
+      sum.innerHTML = "還沒有紀錄——偵測到<b style='color:var(--text)'>持續哭聲</b>並播放後，這裡會逐日累積（短促的哀叫不計入）。" + dry;
       box.innerHTML = ""; $("cryAxis").style.display = "none";
-      $("cryMoreBtn").style.display = $("cryClearBtn").style.display = "none";
+      $("cryMoreBtn").style.display = "none";
+      // 舊資料裡可能還留著哀叫紀錄（不畫但存在），仍要讓使用者清得掉
+      $("cryClearBtn").style.display = cryArr.length ? "" : "none";
       return;
     }
     // 依日分組（新的在上）
     const byDay = {};
-    cryArr.forEach(c => { (byDay[dayKey(c.t)] = byDay[dayKey(c.t)] || []).push(c); });
+    cries.forEach(c => { (byDay[dayKey(c.t)] = byDay[dayKey(c.t)] || []).push(c); });
     const keys = Object.keys(byDay).sort().reverse();
     const today = dayKey(Date.now()), yst = dayKey(Date.now() - 86400000);
-    const wk = cryArr.filter(c => c.t >= Date.now() - 7 * 86400000).length;
+    const wk = cries.filter(c => c.t >= Date.now() - 7 * 86400000).length;
     sum.innerHTML = "今天 <b style='color:var(--text)'>" + (byDay[today] || []).length + "</b> 次"
       + "｜昨天 <b style='color:var(--text)'>" + (byDay[yst] || []).length + "</b> 次"
-      + "｜過去 7 天平均 <b style='color:var(--text)'>" + (wk / 7).toFixed(1) + "</b> 次/天";
+      + "｜過去 7 天平均 <b style='color:var(--text)'>" + (wk / 7).toFixed(1) + "</b> 次/天" + dry;
     const wd = ["日", "一", "二", "三", "四", "五", "六"];
     const pad = n => (n < 10 ? "0" : "") + n;
     const show = cryShowAll ? keys : keys.slice(0, 7);
@@ -544,7 +556,7 @@
   $("cryMoreBtn").addEventListener("click", () => { cryShowAll = !cryShowAll; renderCry(); });
   $("cryClearBtn").addEventListener("click", () => {
     cryArr = []; localStorage.removeItem("crylog"); renderCry();
-    logEvent("📄 哭鬧時間表已清除");
+    logEvent("📄 哭泣時間表已清除");
   });
   renderCry();
 
@@ -1579,6 +1591,9 @@
   function keeperOn() {
     if (!keepCk.checked) return;
     keepSuspended = false; // 重新開始監聽＝重新給它一次機會
+    // 無音樂空窗以「本次監聽」為範圍：連基準點一起歸零，否則重新開始後算出來的
+    // 第一個空窗會橫跨整段停機時間（08/14 就出現過橫跨 4.5 小時停機的假數字）
+    maxDry = 0; lastRealAudioAt = 0; renderCry(); // 摘要要跟著歸零，否則畫面停在上一輪的數字
     ensureKeeper();
     pulseFails = 0;
     // 「本次開啟以來一次都沒成功」的四振出局要以**這次監聽**為範圍，訊息才誠實。
@@ -1832,10 +1847,17 @@
   // 哭一次、音樂就播一次；斷線那晚有 3 小時 37 分完全沒有音樂，只剩保連脈衝。
   // 兩晚的保連紀錄一模一樣，所以差異只可能在這裡——把它寫進紀錄才有辦法驗證
   let lastRealAudioAt = 0;
+  function fmtDry(ms) {
+    const m = ms / 60000;
+    return m < 90 ? Math.round(m) + " 分鐘" : (m / 60).toFixed(1) + " 小時";
+  }
   function drySpell() {
     if (!lastRealAudioAt) return "尚未播放過";
-    const m = (Date.now() - lastRealAudioAt) / 60000;
-    return m < 90 ? Math.round(m) + " 分鐘" : (m / 60).toFixed(1) + " 小時";
+    const gap = Date.now() - lastRealAudioAt;
+    // 這是判斷保連訊號有沒有效的關鍵數字：斷線那晚乾旱 3 小時 37 分，
+    // 平安的夜晚都不到 1 小時。停止監聽期間不該計入（曾出現橫跨停機的 4.7 小時假值）
+    if (running && gap > maxDry) { maxDry = gap; renderCry(); }
+    return fmtDry(gap);
   }
   let blockedRun = 0;          // 連續幾次觸發完全播不出來（整晚只剩嗶聲要看得見）
   let lastDeadWarn = 0;        // 「備援全滅」的警告節流，每 10 分鐘最多一次
@@ -1935,9 +1957,11 @@
       const mins = minsOverride || playDur.value;
       const isManual = reason === "手動播放";
       lastAlertManual = isManual; // 播完後要判斷該不該自動接手站崗
-      // 哭鬧時間表只記偵測觸發：手動播放是照顧者的動作，不是寶寶哭鬧。
       // ok 先留空，等這一輪播放塵埃落定再補寫（成功／只剩嗶聲）
-      const cryRec = isManual ? null : cryAdd(reason || "偵測", burstF0 || (stat && stat.bestF0) || 0);
+      // 時間表只收「持續哭聲」：哀叫（短聲達標）數量太多——08/14 下午 3 小時 44 分
+      // 就有約 30 次——畫在 24 小時軸上是一整片點，作息規律反而看不出來。
+      // 哀叫照樣會觸發播放，只是不進時間表
+      const cryRec = reason === CRY_REASON ? cryAdd(reason, burstF0 || (stat && stat.bestF0) || 0) : null;
       const head = isManual ? "手動播放" : "偵測到哭聲！";
       // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽。
       // 淡出僅手動播放嘗試：警報無手勢、淡出引擎必被 iOS 拒絕（實測 100%），
