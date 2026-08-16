@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v82</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v83</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1302,7 +1302,10 @@
     calUntil = lastT + 3000;
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
-    logEvent("開始監聽（" + (trigMode.value === "fuss" ? "哭泣＋哀叫" : "僅哭泣") + "，靈敏度 " + sens.value + "%）");
+    deafRuns = 0; // 「全滅了幾分鐘」是這一次監聽的數字，不該跨越停止／重新開始
+    logEvent("開始監聽（" + (trigMode.value === "fuss" ? "哭泣＋哀叫" : "僅哭泣") + "，靈敏度 " + sens.value + "%）"
+      + "，取樣率 " + audioCtx.sampleRate + "Hz"
+      + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
     requestWake();
     loop();
   }
@@ -1368,7 +1371,12 @@
       // 這條路自己拿回麥克風，不經過 recoverMic——旗標要在這裡歸位，
       // 否則播放留下的 micOffPlaying 會讓下一次例行重連被誤標成「播放期間離線」
       micOffAt = 0; micOffPlaying = false;
-      logEvent("音訊已重建，恢復監聽");
+      // 取樣率一定要寫出來：偵測引擎是在錄音工作階段裡重建的，有機會拿到通話級的
+      // 8k/16k/24k。淡出引擎早就有 <40000 的檢查（見 fadeCtx），偵測引擎卻從來沒驗過，
+      // 事後也查不到——08/16 16:15 重建後整整 30 分鐘偵測不出任何東西，就分不清
+      // 是引擎劣化還是環境問題。加一個數字，這個問題以後永遠不必再猜
+      logEvent("音訊已重建，恢復監聽（取樣率 " + audioCtx.sampleRate + "Hz）"
+        + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
       if (running && !alerting) setStatus("listening", "監聽中…", "已回到偵測狀態");
     } catch (e) {
       logEvent("⚠️ 音訊重建失敗：" + (e.message || e));
@@ -2174,6 +2182,10 @@
   // 背景心跳狀態：診斷行受「夠大聲」把關，安靜時根本不輸出，無法用來驗證
   // 背景偵測是否還活著（這正是先前誤判的來源）
   let bgT0 = 0, bgFrames = 0, bgPeak = -120;
+  // 連續幾個「有聲音卻基頻＋頻譜全滅」的診斷視窗就示警。一個視窗 10 秒，
+  // 6 個＝約 1 分鐘——短暫的低頻干擾不必吵，持續一分鐘就真的該講了
+  const DEAF_RUNS = 6;
+  let deafRuns = 0;
   let loopTicks = 0; // 迴圈生命跡象：由迴圈外的看門狗檢查（見 loopWatchdog）
   function loop() {
     if (!running) return;
@@ -2348,6 +2360,16 @@
       if (stat.loud > 5 && !alerting) {
         const pc = k => Math.round(stat[k] / stat.n * 100) + "%";
         logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : ""));
+        // 「聽得到聲音，但基頻與頻譜一個都沒過」＝ dspCry 的 (babyPitch || spectralCry)
+        // 恆為假，寶寶再怎麼哭都觸發不了。迴圈活著、麥克風活著、紀錄照寫，只有偵測是死的——
+        // v82 的迴圈看門狗看不到這一層。實測 08/16 16:15 重建後整整 30 分鐘都是這個狀態，
+        // 期間零觸發，而當下沒有任何一行說「我現在其實聽不出哭聲」
+        deafRuns = (stat.baby === 0 && stat.spec === 0) ? deafRuns + 1 : 0;
+        if (deafRuns === DEAF_RUNS || (deafRuns > DEAF_RUNS && (deafRuns - DEAF_RUNS) % 30 === 0)) {
+          logEvent("⚠️ 有聲音但偵測條件全滅約 " + Math.round(deafRuns * 10 / 60) + " 分鐘"
+            + "（基頻與頻譜連續 0%，F0 一直是 " + stat.bestF0.toFixed(0) + "Hz）"
+            + "——這段時間哭聲可能觸發不了，請確認附近是否有持續的低頻噪音（電扇、除濕機、冷氣）");
+        }
       }
       stat = null;
     }
