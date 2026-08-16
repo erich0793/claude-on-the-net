@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v81</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v82</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -846,7 +846,9 @@
   if (sessionStorage.getItem("autoresume") === "1") {
     sessionStorage.removeItem("autoresume");
     audioReady.then(() => {
-      logEvent("頁面已重載，自動恢復監聽");
+      // 重載會沒收手勢授權（鐵律），所以這條路徑一定是「無手勢啟動」——
+      // 池能解鎖幾顆全看運氣，實測有過 2/12。寫清楚，別讓它看起來像正常啟動
+      logEvent("頁面已重載，自動恢復監聽（無手勢，播放權限待補）");
       start();
     });
   }
@@ -1013,6 +1015,10 @@
 
   // 背景噪音估計（dB）：比目前小聲就快速下修，否則以約 0.5dB/秒緩慢上修
   let noiseFloor = -60;
+  // 最近一幀的音量：觸發那一行要標出「當下有多大聲」。必須宣告在這裡——
+  // 讀它的 trigger() 在檔案後段，但 let 的暫時性死區是以「執行順序」算的，
+  // 宣告若放到播放區就會在觸發時炸掉（v81 的 maxDry 就是這樣讓時間表整個不渲染）
+  let lastDb = -120;
   function updateNoiseFloor(db, dt, calibrating) {
     if (db < noiseFloor) noiseFloor += (db - noiseFloor) * 0.2;
     else noiseFloor += calibrating ? (db - noiseFloor) * 0.05 : 0.0005 * dt; // 校準期快速上修
@@ -1119,9 +1125,20 @@
   const POOL_N = 12;
   function topUpPool() {
     if (!player.src) return;
+    // 先清掉「生出來就沒解鎖成功」的元素。少了這一步，一次無手勢的補鑄
+    // （例如自動重載後）會用 12 顆永遠播不動的元素把池佔滿，而 while 只看數量，
+    // 之後使用者再怎麼碰畫面都補不進新的——實測 08/16 16:46 就是卡在這裡，
+    // 池顯示 2/12 直到使用者自己重開網頁。死元素留著只會讓系統誤判庫存充足。
+    const dead = elPool.filter(e => !e._unlockOK && !e._inUse && Date.now() - e._born > 6000);
+    if (dead.length) {
+      elPool = elPool.filter(e => dead.indexOf(e) < 0);
+      dead.forEach(e => { try { e.pause(); e.removeAttribute("src"); e.load(); } catch (err) {} });
+      logEvent("🔧 已淘汰 " + dead.length + " 顆未取得播放權的元素，重新解鎖");
+    }
     const before = elPool.length;
     while (elPool.length < POOL_N) {
       const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
+      el._born = Date.now();
       el.setAttribute("x-webkit-airplay", "allow");
       tagEl(el, "解鎖");
       // 注意：事件處理器延到「被徵用」時才掛——解鎖的暫停是非同步落地的，
@@ -1147,7 +1164,18 @@
       const tally = {};
       elPool.forEach(e => { if (e._unlockErr) tally[e._unlockErr] = (tally[e._unlockErr] || 0) + 1; });
       const errs = Object.keys(tally).map(k => k + "×" + tally[k]);
-      logEvent("元素池已備妥：解鎖 " + ok + "/" + elPool.length + (errs.length ? "（失敗：" + errs.join("、") + "）" : ""));
+      // 「被拒絕」和「懸置」要分開：無手勢時 iOS 讓 play() 永遠不回來（既不 resolve 也不 reject），
+      // 只寫「解鎖 2/12」的話兩種病因長得一模一樣，查不出是沒權限還是卡住了
+      const pending = elPool.length - ok - elPool.filter(e => e._unlockErr).length;
+      const detail = errs.concat(pending > 0 ? ["其餘 " + pending + " 顆尚未回應"] : []);
+      logEvent("元素池已備妥：解鎖 " + ok + "/" + elPool.length + (detail.length ? "（" + detail.join("、") + "）" : ""));
+      // 池是一次手勢一次解鎖，補不回來就只能靠備援元素撐；使用者碰一下畫面就能自救，
+      // 但得先知道要碰——自動重載後實測只解鎖 2/12，而畫面上完全沒有跡象
+      if (ok < POOL_N / 2) {
+        const hint = "播放權限不足（僅 " + ok + "/" + POOL_N + "）——請碰一下畫面任何位置";
+        logEvent("⚠️ " + hint);
+        if (running && !alerting) setStatus("listening", "監聽中…", hint);
+      }
     }, 4000); // 32 顆的解鎖要幾秒才全部落地，太早統計會誤報成失敗
   }
 
@@ -1200,8 +1228,10 @@
   // 監聽中才做，且池滿時 topUpPool 直接空轉，成本為零
   document.addEventListener("pointerdown", () => {
     // 只在真的快見底時才補（過去只要少一顆就補，等於每次碰畫面都來一次
-    // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿
-    if (running && player.src && elPool.length <= 4) { topUpPool(); unlockWarm(); }
+    // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿。
+    // 數的必須是「還能播的顆數」而不是總顆數：無手勢補鑄出來的死元素照樣算進長度，
+    // 池裡塞滿 12 顆播不動的東西時反而永遠過不了這道門檻，使用者怎麼碰都救不回來
+    if (running && player.src && elPool.filter(e => e._unlockOK).length <= 4) { topUpPool(); unlockWarm(); }
     // 保連音軌若還沒被任何手勢解鎖過，任何一次碰畫面都該補上——這是使用者能自救的最短路徑
     if (keepCk.checked && !keeperGestureOK) unlockKeeper();
   }, true);
@@ -1425,6 +1455,37 @@
       kickLoop();
     }
   });
+
+  // —— 迴圈生命跡象看門狗：必須活在迴圈「外面」。
+  // 心跳、診斷、保連脈衝全是迴圈自己寫的，所以迴圈一停、紀錄就跟著靜音——
+  // 監控者與被監控者同生共死等於沒有監控。實測 08/16 16:46 自動重載之後
+  // 整整 19 分鐘一行紀錄都沒有，事後完全查不出那段時間到底有沒有在聽。
+  // 門檻不能寫「完全沒前進」：迴圈死掉之後每次被踢還是會多跑一幀，
+  // 那樣就會在「停擺」與「已恢復」之間來回跳。正常一分鐘上千幀，
+  // 背景被降頻到最慘也有 60 幀／分——30 秒內少於 10 幀等於已經聽不見了
+  const ALIVE_MIN = 10, WATCH_MS = 30000;
+  let lastTicks = -1, stallSince = 0, lastStallLog = 0;
+  setInterval(() => {
+    if (!running) { lastTicks = -1; stallSince = 0; lastStallLog = 0; return; }
+    const now = Date.now();
+    if (lastTicks >= 0 && loopTicks - lastTicks < ALIVE_MIN) {
+      // 發現的當下，迴圈其實已經死了整整一個檢查週期——起算點要往回推，否則第一行寫「停擺 0 秒」
+      if (!stallSince) stallSince = now - WATCH_MS;
+      const secs = Math.round((now - stallSince) / 1000);
+      // 節流：持續停擺每 5 分鐘最多一行，但第一次一定要記
+      if (!lastStallLog || now - lastStallLog > 300000) {
+        lastStallLog = now;
+        logEvent("⚠️ 偵測迴圈停擺約 " + secs + " 秒（"
+          + (document.visibilityState === "visible" ? "前景" : "背景") + "）——這段時間聽不見寶寶");
+      }
+      kickLoop(); // 沿用既有的踢法，不另寫一份
+    } else if (stallSince) {
+      // 恢復一定要記：節流不能把「自救成功了沒」一起吃掉
+      logEvent("偵測迴圈已恢復（停擺約 " + Math.round((now - stallSince) / 1000) + " 秒）");
+      stallSince = 0; lastStallLog = 0;
+    }
+    lastTicks = loopTicks;
+  }, WATCH_MS);
 
   function stop() {
     const hungEl = curEl();   // 需在 stopAlert 清空 alertEl 前捕捉，卡死保險才盯得到正確元素
@@ -1961,7 +2022,8 @@
       // 時間表只收「持續哭聲」：哀叫（短聲達標）數量太多——08/14 下午 3 小時 44 分
       // 就有約 30 次——畫在 24 小時軸上是一整片點，作息規律反而看不出來。
       // 哀叫照樣會觸發播放，只是不進時間表
-      const cryRec = reason === CRY_REASON ? cryAdd(reason, burstF0 || (stat && stat.bestF0) || 0) : null;
+      const trigF0 = burstF0 || (stat && stat.bestF0) || 0;
+      const cryRec = reason === CRY_REASON ? cryAdd(reason, trigF0) : null;
       const head = isManual ? "手動播放" : "偵測到哭聲！";
       // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽。
       // 淡出僅手動播放嘗試：警報無手勢、淡出引擎必被 iOS 拒絕（實測 100%），
@@ -1987,11 +2049,18 @@
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
       const dryBefore = drySpell(); // 先讀：等一下播放成功會把時戳歸零
+      // 觸發那一行以前沒有任何聲學數據，事後只能寄望附近剛好有一行「診斷：」——
+      // 而診斷只在「有聲音但沒觸發」時才寫，正好跟想查的相反。把量測寫在觸發本身上：
+      // 高出背景越少就越可能是誤觸（靈敏度 55% 的門檻約是高出 12.7dB）
+      const eviD = isManual ? "" // 手動播放是你按的，沒有聲學意義
+        : "｜峰值 " + lastDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0)
+          + "，高出 " + Math.round(lastDb - noiseFloor) + "dB）"
+          + (trigF0 ? "｜F0≈" + trigF0.toFixed(0) + "Hz" : "");
       logEvent("🔊 觸發播放（" + (reason || "手動")
         + (el === player ? "，共用播放器"
            : el._origin === "熱身" ? "，熱身元素#" + el._id
            : "，新元素#" + el._id + "，池餘 " + elPool.length)
-        + "，距上次音樂 " + dryBefore + "）");
+        + "，距上次音樂 " + dryBefore + eviD + "）");
       if (mins !== "once") {
         el.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);
@@ -2105,8 +2174,10 @@
   // 背景心跳狀態：診斷行受「夠大聲」把關，安靜時根本不輸出，無法用來驗證
   // 背景偵測是否還活著（這正是先前誤判的來源）
   let bgT0 = 0, bgFrames = 0, bgPeak = -120;
+  let loopTicks = 0; // 迴圈生命跡象：由迴圈外的看門狗檢查（見 loopWatchdog）
   function loop() {
     if (!running) return;
+    loopTicks++; // 必須在 resetting 早退之前——要驗的是「排程還在跑」，不是「跑完整幀」
     // 前景用 rAF；背景時 iOS 凍結 rAF，但「錄音中的頁面」計時器仍會運轉——
     // 切換為計時器驅動，讓偵測在瀏覽器退到背景時繼續工作
     if (document.visibilityState === "visible") {
@@ -2156,7 +2227,7 @@
     // 否則靜音會把基準拖到 -100dB 以下，重連後整整一分鐘任何聲音都「音量爆表」
     const tk = stream && stream.getAudioTracks()[0];
     const micLive = !!(tk && tk.readyState === "live") && audioCtx.state === "running";
-    if (micLive) updateNoiseFloor(db, dt, now < calUntil);
+    if (micLive) { updateNoiseFloor(db, dt, now < calUntil); lastDb = db; }
     // AI 取音：把每幀新增的樣本從波形快照尾端拼進緩衝（連續 PCM 近似，不掛任何音訊節點）
     if (micLive && mlReady && mlCk.checked && mlBuf) {
       const add = Math.min(timeData.length, Math.round(audioCtx.sampleRate * dt / 1000));
@@ -2218,7 +2289,7 @@
         const bStrongNeed = fuss ? 80 : 120;
         if (burstMs >= bMinMs && (burstStrongMs >= bStrongNeed || (mlFresh && mlScore >= mlThr * 0.6))) {
           burstTimes.push(now);
-          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，25 秒內第 " + burstTimes.length + " 聲）");
+          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，高出背景 " + Math.round(lastDb - noiseFloor) + "dB，25 秒內第 " + burstTimes.length + " 聲）");
         }
         burstMs = 0; burstStrongMs = 0; burstBestR = 0;
         cryMs = Math.max(0, cryMs - dt * 0.6);
