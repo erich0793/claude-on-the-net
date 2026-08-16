@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v85</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v84</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1019,10 +1019,6 @@
   // 讀它的 trigger() 在檔案後段，但 let 的暫時性死區是以「執行順序」算的，
   // 宣告若放到播放區就會在觸發時炸掉（v81 的 maxDry 就是這樣讓時間表整個不渲染）
   let lastDb = -120;
-  // 證據的峰值。v82 用 lastDb 是錯的：短聲那一行是在「聲音已經停掉」的第一幀才寫的，
-  // 量到的是尾巴不是聲音本身（實測同一次事件，短聲行寫 21dB、觸發行寫 13dB）。
-  // burstPeakDb＝這一段連續哭聲期間的最大值；evPeakDb＝目前所有還沒過期的證據的最大值
-  let burstPeakDb = -120, evPeakDb = -120;
   function updateNoiseFloor(db, dt, calibrating) {
     if (db < noiseFloor) noiseFloor += (db - noiseFloor) * 0.2;
     else noiseFloor += calibrating ? (db - noiseFloor) * 0.05 : 0.0005 * dt; // 校準期快速上修
@@ -2026,7 +2022,6 @@
   function trigger(reason, minsOverride) {
     if (alerting) return;
     alerting = true; cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
-    const evPeakAtTrig = evPeakDb; evPeakDb = -120; burstPeakDb = -120; // 讀走這次的證據峰值後歸零，不留給下一次
     if (player.src) {
       const mins = minsOverride || playDur.value;
       const isManual = reason === "手動播放";
@@ -2065,11 +2060,9 @@
       // 觸發那一行以前沒有任何聲學數據，事後只能寄望附近剛好有一行「診斷：」——
       // 而診斷只在「有聲音但沒觸發」時才寫，正好跟想查的相反。把量測寫在觸發本身上：
       // 高出背景越少就越可能是誤觸（靈敏度 55% 的門檻約是高出 12.7dB）
-      // 用證據的峰值，不是觸發當下那一幀——觸發常發生在聲音已經收尾的瞬間
-      const evDb = evPeakAtTrig > -120 ? evPeakAtTrig : lastDb;
       const eviD = isManual ? "" // 手動播放是你按的，沒有聲學意義
-        : "｜峰值 " + evDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0)
-          + "，高出 " + Math.round(evDb - noiseFloor) + "dB）"
+        : "｜峰值 " + lastDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0)
+          + "，高出 " + Math.round(lastDb - noiseFloor) + "dB）"
           + (trigF0 ? "｜F0≈" + trigF0.toFixed(0) + "Hz" : "");
       logEvent("🔊 觸發播放（" + (reason || "手動")
         + (el === player ? "，共用播放器"
@@ -2299,8 +2292,6 @@
     } else if (!alerting) {
       if (cryLike) {
         cryMs += dt; burstMs += dt;
-        if (db > burstPeakDb) burstPeakDb = db;
-        if (db > evPeakDb) evPeakDb = db;
         if ((babyPitch && pe.r > 0.45) || mlCry) burstStrongMs += dt; // 清晰嬰兒聲帶振動或 AI 確認
         if (pe.r > burstBestR) { burstBestR = pe.r; burstF0 = pe.f0; }
       } else {
@@ -2310,14 +2301,12 @@
         const bStrongNeed = fuss ? 80 : 120;
         if (burstMs >= bMinMs && (burstStrongMs >= bStrongNeed || (mlFresh && mlScore >= mlThr * 0.6))) {
           burstTimes.push(now);
-          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，高出背景 " + Math.round(burstPeakDb - noiseFloor) + "dB，25 秒內第 " + burstTimes.length + " 聲）");
+          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，高出背景 " + Math.round(lastDb - noiseFloor) + "dB，25 秒內第 " + burstTimes.length + " 聲）");
         }
-        burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstPeakDb = -120;
+        burstMs = 0; burstStrongMs = 0; burstBestR = 0;
         cryMs = Math.max(0, cryMs - dt * 0.6);
       }
       while (burstTimes.length && now - burstTimes[0] > 25000) burstTimes.shift();
-      // 沒有還在等待的證據，就沒有峰值可留——否則半小時前的一聲巨響會灌進下一次觸發
-      if (cryMs === 0 && burstTimes.length === 0) evPeakDb = -120;
       if (cryMs >= +dur.value) trigger("持續哭聲");                 // 持續哭聲
       else if (fuss && burstTimes.length >= 2) trigger("短聲達標"); // 25 秒內 2 聲哀叫
     }
