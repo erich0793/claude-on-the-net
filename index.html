@@ -161,7 +161,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v83</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v84</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2364,7 +2364,11 @@
         // 恆為假，寶寶再怎麼哭都觸發不了。迴圈活著、麥克風活著、紀錄照寫，只有偵測是死的——
         // v82 的迴圈看門狗看不到這一層。實測 08/16 16:15 重建後整整 30 分鐘都是這個狀態，
         // 期間零觸發，而當下沒有任何一行說「我現在其實聽不出哭聲」
-        deafRuns = (stat.baby === 0 && stat.spec === 0) ? deafRuns + 1 : 0;
+        // 只有「很吵而且分類不出來」才算危險。實測除濕機這類穩定低頻會被背景基準
+        // 慢慢吸收，之後每個視窗只有 1～10% 的幀超過音量門檻——那代表房間其實是安靜的，
+        // 沒有東西被漏掉，這時示警只會每晚亂叫。真正該講的是「持續有大量聲音卻一個條件都過不了」
+        const loudFrac = stat.loud / stat.n;
+        deafRuns = (loudFrac >= 0.15 && stat.baby === 0 && stat.spec === 0) ? deafRuns + 1 : 0;
         if (deafRuns === DEAF_RUNS || (deafRuns > DEAF_RUNS && (deafRuns - DEAF_RUNS) % 30 === 0)) {
           logEvent("⚠️ 有聲音但偵測條件全滅約 " + Math.round(deafRuns * 10 / 60) + " 分鐘"
             + "（基頻與頻譜連續 0%，F0 一直是 " + stat.bestF0.toFixed(0) + "Hz）"
