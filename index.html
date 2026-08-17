@@ -169,7 +169,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v86</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v87</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1054,9 +1054,26 @@
   // 量到的是尾巴不是聲音本身（實測同一次事件，短聲行寫 21dB、觸發行寫 13dB）。
   // burstPeakDb＝這一段連續哭聲期間的最大值；evPeakDb＝目前所有還沒過期的證據的最大值
   let burstPeakDb = -120, evPeakDb = -120;
+  // 麥克風主動關閉前的基準（null＝沒有可信的前值，例如剛開始監聽）。
+  // 重連後那 2 秒的快速校準會在 0.3 秒內收斂到「當下音量」——如果那一刻寶寶正在大哭，
+  // 哭聲就被學成背景了。實測 08/17 17:46 播放結束重連後，基準 16 秒內從 -65 跳到 -52，
+  // 之後幾分鐘的偵測門檻整整高了 13dB——偏偏那正是「音樂剛停、寶寶最可能還在哭」的時刻
+  let floorAtOff = null;
+  const CAL_MAX_RISE = 6; // 一段音樂才 3 分鐘，房間的穩定背景不可能變這麼多
+  let clampLogged = 0;
   function updateNoiseFloor(db, dt, calibrating) {
-    if (db < noiseFloor) noiseFloor += (db - noiseFloor) * 0.2;
-    else noiseFloor += calibrating ? (db - noiseFloor) * 0.05 : 0.0005 * dt; // 校準期快速上修
+    if (db < noiseFloor) { noiseFloor += (db - noiseFloor) * 0.2; return; } // 往下追不設限：房間變安靜要立刻反映
+    noiseFloor += calibrating ? (db - noiseFloor) * 0.05 : 0.0005 * dt; // 校準期快速上修
+    if (!calibrating || floorAtOff === null) return;
+    const cap = floorAtOff + CAL_MAX_RISE;
+    if (noiseFloor <= cap) return;
+    noiseFloor = cap;
+    // 真的夾到代表當下環境比關閉前吵很多。沒有這一行的話，這個機制以後失效或誤動作
+    // 都查不出來——這個專案已經在「沉默的機制」上吃過兩次虧
+    if (clampLogged < 3) {
+      clampLogged++;
+      logEvent("🔧 背景基準已限制上修（關閉前 " + floorAtOff.toFixed(0) + "dB，當下環境 " + db.toFixed(0) + "dB）");
+    }
   }
   // 靈敏度 -> 需高出背景噪音的幅度：0% => +22dB，100% => +5dB
   function loudMarginDb() {
@@ -1338,6 +1355,8 @@
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
     deafRuns = 0; // 「全滅了幾分鐘」是這一次監聽的數字，不該跨越停止／重新開始
+    // 開始監聽時沒有可信的前值，首次校準必須放手學習房間真正的背景
+    floorAtOff = null; clampLogged = 0;
     logEvent("開始監聽（" + (trigMode.value === "fuss" ? "哭泣＋哀叫" : "僅哭泣") + "，靈敏度 " + sens.value + "%）"
       + "，取樣率 " + audioCtx.sampleRate + "Hz"
       + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
@@ -1765,7 +1784,7 @@
     pulsing = true;
     const rider = warmRider(); // 與保連音軌同時播放，順便刷新它的播放授權
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
-    if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = false; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = false; floorAtOff = noiseFloor; }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
     const wait = pulseWait;
     // 收尾（放開元素、收回麥克風）獨立成一個只跑一次的函式：訊號送不出去時
@@ -2117,7 +2136,7 @@
         setStatus("alert", head + " 播放中…", "");
       }
       // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭
-      if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = true; }
+      if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = true; floorAtOff = noiseFloor; }
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
       setTimeout(async () => {
         // 淡出：為本輪建立專屬全新引擎；失敗或引擎劣化則自動退全音量（警報永遠有聲）。
