@@ -123,6 +123,14 @@
     border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px rgba(77,171,247,.7);
   }
   .cry.bad { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+  /* 哀叫用小的空心點：一個下午可能有幾十次，畫成實心大點會把哭泣整個蓋掉 */
+  .cry.fuss {
+    width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px;
+    background: transparent; border: 1.5px solid var(--muted); box-shadow: none;
+  }
+  .cry.fuss.bad { background: transparent; border-color: var(--danger); }
+  .legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-top: 8px; align-items: center; }
+  .legend i { display: inline-block; vertical-align: middle; margin-right: 5px; position: static; }
   .hours { display: grid; grid-template-columns: 62px 1fr 46px; gap: 10px; font-size: 10px; color: var(--muted); }
   .hours div:nth-child(2) { display: flex; justify-content: space-between; }
   .dayrows { font-size: 12px; color: var(--muted); line-height: 1.9; padding: 2px 0 8px 72px; }
@@ -161,7 +169,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v85</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v86</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -240,10 +248,17 @@
 
   <div class="pane" id="paneLog" hidden>
   <div class="card">
-    <div style="font-size:14px; font-weight:600; margin-bottom:4px">😢 哭泣時間表</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px">
+      <div style="font-size:14px; font-weight:600">😢 哭泣時間表</div>
+      <select id="cryMode" style="font:inherit; font-size:12px; padding:5px 8px; border-radius:9px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
+        <option value="cry">只看哭泣</option>
+        <option value="all">哭泣＋哀叫</option>
+      </select>
+    </div>
     <div class="hint" id="crySum" style="margin-bottom:12px">還沒有紀錄</div>
     <div id="cryDays"></div>
     <div class="hours" id="cryAxis" style="display:none; margin-top:6px"><div></div><div><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div><div></div></div>
+    <div class="legend" id="cryLegend" style="display:none"><span><i class="cry" style="position:static"></i>持續哭聲</span><span><i class="cry fuss" style="position:static"></i>哀叫</span><span><i class="cry bad" style="position:static"></i>沒播出來</span><span>右邊次數＝哭泣／全部</span></div>
     <div class="row" style="margin-top:12px">
       <button id="cryMoreBtn" style="font-size:12px; padding:6px 12px; display:none">顯示更多天</button>
       <button id="cryClearBtn" style="font-size:12px; padding:6px 12px; display:none">清除時間表</button>
@@ -476,10 +491,14 @@
   // 與事件紀錄分開存：事件紀錄是給人查故障的技術流水帳，會被例行心跳淘汰掉；
   // 這裡要的是能留一個月、看得出作息規律的稀疏資料。
   const CRY_DAYS = 30;
-  const CRY_REASON = "持續哭聲"; // 時間表只採計這一種觸發原因（哀叫不算）
+  const CRY_REASON = "持續哭聲", FUSS_REASON = "短聲達標";
   let cryArr = [];
   try { cryArr = JSON.parse(localStorage.getItem("crylog") || "[]"); } catch (e) {}
   let cryShowAll = false;
+  // 圖要畫哪些觸發：cry＝只看哭泣（預設，作息規律最清楚）／all＝哭泣＋哀叫。
+  // v81～v85 期間「哀叫根本沒被記下來」，所以切到 all 時那段日子只會有哭泣——
+  // 這是資料的事實，不是壞掉，空狀態與圖例都要講清楚
+  let cryMode = localStorage.getItem("cryMode") === "all" ? "all" : "cry";
   // 本次監聽的最長無音樂空窗；只在監聽中累計，停止期間不算。
   // 必須宣告在這裡：renderCry() 在頁面載入時就會讀它，放到播放區才宣告會踩到
   // let 的暫時性死區，整個時間表會靜靜地不渲染（實測就是這樣壞掉的）
@@ -499,15 +518,17 @@
   const dayKey = t => { const d = new Date(t); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate(); };
   function renderCry() {
     const sum = $("crySum"), box = $("cryDays");
-    // 舊資料混著哀叫，一併濾掉才不會前後不一致（不刪除，只是不畫）
-    const cries = cryArr.filter(c => c.why === CRY_REASON);
+    const all = cryMode === "all";
+    const cries = cryArr.filter(c => c.why === CRY_REASON || (all && c.why === FUSS_REASON));
     // 這個數字決定「保連訊號到底有沒有用」的實驗：要超過上次出事的長度才算通過
     const dry = maxDry ? "｜本次監聽最長無音樂 <b style='color:var(--text)'>" + fmtDry(maxDry) + "</b>" : "";
+    $("cryLegend").style.display = all ? "" : "none";
     if (!cries.length) {
-      sum.innerHTML = "還沒有紀錄——偵測到<b style='color:var(--text)'>持續哭聲</b>並播放後，這裡會逐日累積（短促的哀叫不計入）。" + dry;
+      sum.innerHTML = "還沒有紀錄——偵測到" + (all ? "<b style='color:var(--text)'>哭泣或哀叫</b>" : "<b style='color:var(--text)'>持續哭聲</b>")
+        + "並播放後，這裡會逐日累積" + (all ? "。" : "（短促的哀叫不計入）。") + dry;
       box.innerHTML = ""; $("cryAxis").style.display = "none";
       $("cryMoreBtn").style.display = "none";
-      // 舊資料裡可能還留著哀叫紀錄（不畫但存在），仍要讓使用者清得掉
+      // 另一種模式底下可能還有資料，仍要讓使用者清得掉
       $("cryClearBtn").style.display = cryArr.length ? "" : "none";
       return;
     }
@@ -517,8 +538,11 @@
     const keys = Object.keys(byDay).sort().reverse();
     const today = dayKey(Date.now()), yst = dayKey(Date.now() - 86400000);
     const wk = cries.filter(c => c.t >= Date.now() - 7 * 86400000).length;
-    sum.innerHTML = "今天 <b style='color:var(--text)'>" + (byDay[today] || []).length + "</b> 次"
-      + "｜昨天 <b style='color:var(--text)'>" + (byDay[yst] || []).length + "</b> 次"
+    // 合併模式下另外標出其中有幾次是真的哭——不然「今天 40 次」看不出嚴重程度
+    const cryOnly = l => (l || []).filter(c => c.why === CRY_REASON).length;
+    const part = l => all ? "（其中哭泣 " + cryOnly(l) + "）" : "";
+    sum.innerHTML = "今天 <b style='color:var(--text)'>" + (byDay[today] || []).length + "</b> 次" + part(byDay[today])
+      + "｜昨天 <b style='color:var(--text)'>" + (byDay[yst] || []).length + "</b> 次" + part(byDay[yst])
       + "｜過去 7 天平均 <b style='color:var(--text)'>" + (wk / 7).toFixed(1) + "</b> 次/天" + dry;
     const wd = ["日", "一", "二", "三", "四", "五", "六"];
     const pad = n => (n < 10 ? "0" : "") + n;
@@ -530,7 +554,8 @@
         const x = new Date(c.t);
         const pct = ((x.getHours() * 60 + x.getMinutes()) / 1440 * 100).toFixed(2);
         // 沒播出來的用紅點：哪一晚失聰過會自己現形，不必再爬事件紀錄
-        return '<i class="cry' + (c.ok === false ? " bad" : "") + '" style="left:' + pct + '%"></i>';
+        return '<i class="cry' + (c.why === FUSS_REASON ? " fuss" : "") + (c.ok === false ? " bad" : "")
+          + '" style="left:' + pct + '%"></i>';
       }).join("");
       const times = list.map(c => {
         const x = new Date(c.t);
@@ -540,7 +565,7 @@
       return '<div class="day" data-k="' + k + '">'
         + '<span class="dlabel">' + (d.getMonth() + 1) + "/" + pad(d.getDate()) + "（" + wd[d.getDay()] + "）</span>"
         + '<span class="track">' + dots + "</span>"
-        + '<span class="dcount">' + list.length + " 次</span></div>"
+        + '<span class="dcount">' + (all ? cryOnly(list) + "／" : "") + list.length + " 次</span></div>"
         + '<div class="dayrows" data-rows="' + k + '" style="display:none">' + times + "</div>";
     }).join("");
     $("cryAxis").style.display = "";
@@ -554,6 +579,12 @@
     if (r) r.style.display = r.style.display === "none" ? "" : "none";
   });
   $("cryMoreBtn").addEventListener("click", () => { cryShowAll = !cryShowAll; renderCry(); });
+  $("cryMode").value = cryMode;
+  $("cryMode").addEventListener("change", () => {
+    cryMode = $("cryMode").value;
+    localStorage.setItem("cryMode", cryMode);
+    renderCry();
+  });
   $("cryClearBtn").addEventListener("click", () => {
     cryArr = []; localStorage.removeItem("crylog"); renderCry();
     logEvent("📄 哭泣時間表已清除");
@@ -2036,7 +2067,9 @@
       // 就有約 30 次——畫在 24 小時軸上是一整片點，作息規律反而看不出來。
       // 哀叫照樣會觸發播放，只是不進時間表
       const trigF0 = burstF0 || (stat && stat.bestF0) || 0;
-      const cryRec = reason === CRY_REASON ? cryAdd(reason, trigF0) : null;
+      // 兩種偵測觸發都記下來，圖上要不要畫由 cryMode 決定（手動播放是你按的，不記）。
+      // v81 當時是「不記錄」哀叫，導致想回頭看也看不到——過濾要留在呈現層，不要留在寫入層
+      const cryRec = (reason === CRY_REASON || reason === FUSS_REASON) ? cryAdd(reason, trigF0) : null;
       const head = isManual ? "手動播放" : "偵測到哭聲！";
       // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽。
       // 淡出僅手動播放嘗試：警報無手勢、淡出引擎必被 iOS 拒絕（實測 100%），
