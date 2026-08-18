@@ -169,7 +169,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v87</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v88</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2407,8 +2407,12 @@
     }
 
     // 診斷統計：每 10 秒彙整一次；期間有明顯聲音卻沒觸發時，寫入事件紀錄供調校。
-    // 麥克風離線的幀不列入，避免產生誤導性的統計
-    if (!micLive) stat = null;
+    // 麥克風離線的幀不列入，避免產生誤導性的統計。
+    // 校準期（calUntil）同理而且更重要：那段期間**依設計就不會觸發**（見下方
+    // 累積區的 now < calUntil），所以「有聲音卻沒觸發」這個命題根本不成立。
+    // 不排除的話，每次保連脈衝重連都會產生一行假診斷——實測脈衝在 :30 診斷就落在 :46、
+    // 脈衝改成 :54 診斷就跟著跑到 :10，整夜每 4 分鐘一行，佔掉紀錄的一半。
+    if (!micLive || now < calUntil) stat = null;
     else {
     if (!stat) stat = { t0: now, n: 0, loud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestR: 0, bestF0: 0, mlB: 0, mlA: 0 };
     if (mlFresh) { if (mlScore > stat.mlB) stat.mlB = mlScore; if (mlAdult > stat.mlA) stat.mlA = mlAdult; }
