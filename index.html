@@ -169,7 +169,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v88</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v89</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2424,7 +2424,15 @@
     if (db > stat.maxDb) stat.maxDb = db;
     if (pe.r > stat.bestR) { stat.bestR = pe.r; stat.bestF0 = pe.f0; }
     if (now - stat.t0 > 10000) {
-      if (stat.loud > 5 && !alerting) {
+      // 「有明顯聲音」要真的明顯。舊條件 stat.loud > 5 是「600 幀裡有 5 幀」＝ 0.08 秒，
+      // 房間越安靜反而越容易成立：loud 的門檻有 -68dB 的絕對下限，背景掉到 -73 時
+      // 門檻卡在 -65 不動，於是零星幾幀就過關。實測 08/19（除濕機沒開、背景 -73）
+      // 07:00–08:12 就寫了約 45 行「音量1~8% 基頻0% 頻譜0%」的空白診斷。
+      // 改成比例：半秒以上的音量，或基頻／頻譜有實質活動——後者不能漏，
+      // 最有價值的視窗常常是「音量2% 卻 基頻43% 頻譜45%」（08/19 00:14 實例）
+      const frac = k => stat[k] / stat.n;
+      const notable = frac("loud") >= 0.05 || frac("baby") >= 0.10 || frac("spec") >= 0.10;
+      if (notable && !alerting) {
         const pc = k => Math.round(stat[k] / stat.n * 100) + "%";
         logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : ""));
         // 「聽得到聲音，但基頻與頻譜一個都沒過」＝ dspCry 的 (babyPitch || spectralCry)
