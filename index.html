@@ -169,7 +169,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v90</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v91</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -388,6 +388,10 @@
           <option value="45">45Hz 低頻（藍牙壓縮不會吃掉它；小喇叭多半放不出來）</option>
         </select>
         <div class="hint" style="margin-top:4px"><b style="color:var(--text)">脈衝每次都成功、音響卻還是睡著時，換這個試試</b>：藍牙的音訊壓縮常在 16kHz 附近就截掉，17.5kHz 可能根本沒送到喇叭，它收到的等於一片安靜。低頻能通過壓縮；若喇叭有重低音而聽得到悶響，就換回高頻。</div>
+      </div>
+      <div class="ctl" style="margin-top:10px; padding-left:26px">
+        <button id="respeakerBtn" style="width:100%">🔈 重新取得喇叭</button>
+        <div class="hint" style="margin-top:4px"><b style="color:var(--text)">聲音從手機出來、不是從喇叭出來時按這個。</b>它會把播放用的元素與保連音軌全部重建，做到跟「重新整理網頁」一樣的效果，但<b style="color:var(--text)">不會中斷監聽、不會丟掉紀錄</b>。按完約 3 秒後恢復監聽。按了還是從手機出聲，再重新整理網頁。</div>
       </div>
     </div>
     <details style="margin-top:16px">
@@ -699,6 +703,10 @@
   let audioCtx, analyser, source, stream, rafId, loopTimer = null;
   let freqData, timeData;
   let running = false, alerting = false;
+  // 最近一次使用者手勢的時刻。播放被 pause 掉時要靠它分辨是「使用者按的」還是
+  // 「系統中斷的（音訊路由改變、藍牙斷線）」——08/22 20:55 那次寫成「手動停止播放」，
+  // 但連使用者自己都不確定是不是他按的，等於把最關鍵的一條線索寫死了
+  let lastGestureAt = 0;
   let cryMs = 0, lastT = 0, lastWatchdog = 0, lastInfer = 0;
   let burstMs = 0, burstTimes = []; // 哀叫模式：合格短聲的發生時刻
   let burstStrongMs = 0, burstBestR = 0, burstF0 = 0, burstF0Edge = false; // 短聲的品質統計：清晰嬰兒基頻的時長與峰值
@@ -1034,18 +1042,27 @@
     // 先從更小的 lag 掃描、等相關首次跌破 0.3（去相關點）之後的峰值才算真實基頻。
     const minScan = Math.max(2, Math.floor(sr / 2500));
     let bestR = 0, bestLag = 0, started = false;
+    let rm2 = 0, rm1 = 0, seen = 0; // 前兩格的相關值：要判斷的是「上一格」是不是峰
     for (let lag = minScan; lag <= maxLag; lag++) {
       let sum = 0;
       for (let i = 0; i < N - lag; i++) sum += timeData[off + i] * timeData[off + i + lag];
       const r = sum / (energy * (N - lag) / N); // 修正視窗長度造成的偏差
-      if (!started) { if (r < 0.3) started = true; continue; }
-      if (lag > minLag + 1 && r > bestR) { bestR = r; bestLag = lag; } // 排除搜尋邊界的假峰值
+      if (started) {
+        // 只採計「局部極大值」。去相關之後 r 是一條遞減的雜訊斜坡，取全域最大值
+        // 必然停在最小可採計的 lag 上——於是安靜房間的一點雜訊就會拿到
+        // F0 = sr/(minLag+2) 附近的完美假基頻（44.1kHz→959Hz，往後幾格是
+        // 941/923/906/889…）。08/23 一夜 19 次觸發裡有 5 次的 F0 落在 774～938Hz，
+        // 其中兩次是「兩聲短聲都落在裡面」，使用者也確認了有明顯亂播。
+        // 真正的週期性訊號在「一個週期」處一定是一個峰，兩側都比它低；斜坡沒有峰。
+        // v90 只排掉最精準的那一格，等於把假象往後推一格——要排的是整段斜坡。
+        const p = lag - 1;
+        if (seen >= 2 && p > minLag + 1 && rm1 > rm2 && rm1 >= r && rm1 > bestR) { bestR = rm1; bestLag = p; }
+      } else if (r < 0.3) started = true;
+      rm2 = rm1; rm1 = r; seen++;
     }
-    // 去相關之後 r 是遞減的雜訊，取全域最大值就必然落在「最小可採計的 lag」上——
-    // 這個假象的頻率是 sr/(minLag+2)，48kHz 時 960Hz、44.1kHz 時 959Hz，實測兩個取樣率都精準吻合。
-    // 上面那道守衛只排掉 minLag+1，假象往後挪一格而已。它落在嬰兒基頻範圍內，
-    // 只要音量門檻同時通過就會被當成嬰兒音高。**這裡不改判斷、只標記**，
-    // 先讓紀錄能回答「真正的觸發裡有多少是靠這個假象過關的」，有證據再決定要不要改。
+    // edge 旗標保留，但 v91 之後意思變了：既然只採計真正的峰，落在 minLag+2 就代表
+    // 「真的有一個峰剛好卡在搜尋下界」——真實週期可能比搜尋範圍還短（>1000Hz），
+    // 量到的值只是被下界截斷的結果，仍然值得在紀錄上標出來。
     return { f0: bestLag ? sr / bestLag : 0, r: bestR, edge: bestLag === minLag + 2 };
   }
 
@@ -1067,7 +1084,14 @@
   const CAL_MAX_RISE = 6; // 一段音樂才 3 分鐘，房間的穩定背景不可能變這麼多
   let clampLogged = 0;
   function updateNoiseFloor(db, dt, calibrating) {
-    if (db < noiseFloor) { noiseFloor += (db - noiseFloor) * 0.2; return; } // 往下追不設限：房間變安靜要立刻反映
+    if (db < noiseFloor) {
+      noiseFloor += (db - noiseFloor) * 0.2; // 往下追不設限：房間變安靜要立刻反映
+      // …但 -100dB 不是房間，是死掉的串流。實測 08/21 07:48 基準掉到 -180，
+      // 於是 floorAtOff 帶著 -180 進入夾制，重連後基準被壓在 -174，
+      // 要用 0.5dB/秒 爬三分半才回得到 -65。最安靜的夜晚也只到 -73 左右
+      if (noiseFloor < -100) noiseFloor = -100;
+      return;
+    }
     noiseFloor += calibrating ? (db - noiseFloor) * 0.05 : 0.0005 * dt; // 校準期快速上修
     if (!calibrating || floorAtOff === null) return;
     const cap = floorAtOff + CAL_MAX_RISE;
@@ -1124,6 +1148,12 @@
   // 排除「元素殘留的媒體工作階段把路由釘在手機」的可能。
   // 元素解鎖需使用者手勢，故於各按鈕的 click 手勢內補滿。
   let elPool = [], alertEl = null;
+  // 池空掉、開始改用熱身元素時記一行。連續三晚都是同一個劇本：半夜池餘歸零之後，
+  // 因為沒有手勢就無法補鑄，接下來十幾個小時的每一次播放都用同一顆熱身元素#1
+  // （08/21 07:22 之後約 25 小時、08/23 03:08 之後到早上）。
+  // 「一律使用從未播放過的元素、讓 iOS 重新仲裁路由」這條設計原則每天晚上都默默失效，
+  // 而紀錄上完全看不出來——路由跑到手機時，這是必須能對照的一項
+  let poolDryLogged = false;
   function curEl() { return alertEl || player; }
   // 元素身分標記：播放被 iOS 擋下時，靠編號／出身／年齡才能判斷是
   //「一開始就沒解鎖」還是「解鎖後擱置太久失效」
@@ -1161,14 +1191,20 @@
     el.addEventListener("play", refreshTestBtn);
     el.addEventListener("pause", refreshTestBtn);
     el.addEventListener("ended", () => { if (alerting && curEl() === el) stopAlert(); });
-    el.addEventListener("pause", () => {
-      if (alerting && curEl() === el && !el.ended) {
-        stopAlert(true);
-        cooldownUntil = performance.now() + 30000;
-        logEvent("手動停止播放，30 秒內暫不重新觸發");
-        if (running) setStatus("listening", "監聽中…", "已手動停止，30 秒內暫不重新觸發");
-      }
-    });
+    el.addEventListener("pause", () => alertPaused(el));
+  }
+  // 警報播到一半被 pause：可能是使用者按的，也可能是 iOS 因為輸出路由改變（藍牙斷線）
+  // 自己把媒體停掉的。兩者的處置一樣（停警報＋30 秒冷靜期），但**紀錄必須分得出來**——
+  // 這是路由出事時唯一能事後追的線索
+  function alertPaused(el) {
+    if (!alerting || curEl() !== el || el.ended) return;
+    const byUser = Date.now() - lastGestureAt < 2000;
+    stopAlert(true);
+    cooldownUntil = performance.now() + 30000;
+    logEvent(byUser ? "手動停止播放，30 秒內暫不重新觸發"
+                    : "⚠️ 播放被系統中斷（沒有手勢，可能是音訊路由改變，例如藍牙斷線），30 秒內暫不重新觸發");
+    if (running) setStatus("listening", "監聽中…", byUser ? "已手動停止，30 秒內暫不重新觸發"
+                                                          : "播放被系統中斷，30 秒內暫不重新觸發");
   }
   function clearPool() { elPool = []; }
   // 舊的「無手勢補鑄」已移除：08/01 整夜的紀錄證明補鑄元素被 iOS 以
@@ -1193,6 +1229,7 @@
       logEvent("🔧 已淘汰 " + dead.length + " 顆未取得播放權的元素，重新解鎖");
     }
     const before = elPool.length;
+    if (elPool.length < POOL_N) poolDryLogged = false; // 有補進新元素就重新計一次
     while (elPool.length < POOL_N) {
       const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
       el._born = Date.now();
@@ -1284,6 +1321,7 @@
   // 任何點擊都是使用者手勢：順手把元素池補滿，不必特地重按「開始監聽」。
   // 監聽中才做，且池滿時 topUpPool 直接空轉，成本為零
   document.addEventListener("pointerdown", () => {
+    lastGestureAt = Date.now(); // 播放被停掉時要靠它分辨是使用者按的還是系統中斷的
     // 只在真的快見底時才補（過去只要少一顆就補，等於每次碰畫面都來一次
     // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿。
     // 數的必須是「還能播的顆數」而不是總顆數：無手勢補鑄出來的死元素照樣算進長度，
@@ -1646,6 +1684,56 @@
   // 呼叫 start()，那時已經沒有手勢，保連音軌整晚沒有無手勢播放權，脈衝 100% 被擋。
   // 手勢很珍貴，能一次解鎖就別漏掉任何一種
   function unlockAll() { unlockKeeper(); unlockWarm(); topUpPool(); }
+
+  // 「🔈 重新取得喇叭」：聲音跑到手機、只有重新整理救得回來時的手動自救。
+  // 08/22 20:55／21:44 兩次警報從手機出聲，22:21 重新整理後才回到藍牙喇叭。
+  // 當時池裡還有 4 顆從未播放過的元素、保連每 4 分鐘都在跑、距上次音樂只有幾分鐘——
+  // 所以既不是喇叭睡著，也不是單顆元素的問題，是釘死在「工作階段」層級。
+  // 重新整理會沒收使用者手勢的播放授權（iOS 上最貴的東西），所以這裡改成
+  // 在「按下按鈕這一次手勢」內重建重新整理會重建的東西：整個元素池 ＋ 保連音軌，
+  // 再跑一次深度音訊重置讓 iOS 重新仲裁輸出。
+  // 機制還沒查清楚，所以**不做任何自動化**——自動亂重建的風險比手動一鍵高太多。
+  let respeaking = false;
+  function swapKeeper() {
+    return new Promise(resolve => {
+      // 保連死掉（喇叭整晚睡著）比路由釘死更糟：新的沒解鎖成功就寧可沿用舊的
+      if (!keepCk.checked || pulsing || keeperFreshing || (keeper && !keeper.paused)) return resolve(false);
+      const fresh = new Audio(keepWavUrl());
+      fresh.loop = true;
+      fresh.setAttribute("x-webkit-airplay", "allow");
+      fresh.muted = true;
+      const p = fresh.play();
+      if (!p) return resolve(false);
+      p.then(() => {
+        fresh.pause(); fresh.muted = false;
+        const old = keeper;
+        keeper = fresh; keeperGestureOK = true;
+        if (old) { try { old.pause(); old.removeAttribute("src"); old.load(); } catch (e) {} }
+        resolve(true);
+      }).catch(() => { try { fresh.pause(); } catch (e) {} resolve(false); });
+    });
+  }
+  async function respeaker() {
+    if (respeaking) return;
+    respeaking = true;
+    respeakerBtn.disabled = true;
+    try {
+      const old = elPool.slice();
+      clearPool();
+      old.forEach(e => { if (!e._inUse) { try { e.pause(); e.removeAttribute("src"); e.load(); } catch (err) {} } });
+      topUpPool();   // 這一次手勢內解鎖一批全新元素——之後就沒有手勢了
+      unlockWarm();
+      const swapped = await swapKeeper();
+      logEvent("🔧 已重新取得喇叭（元素池已換新"
+        + (swapped ? "，保連音軌已換新" : "，保連音軌沿用舊的：新的沒取得播放權") + "）");
+      if (running) await deepAudioReset(); // 釋放全部音訊資源 3 秒，讓 iOS 重新仲裁路由
+    } finally {
+      respeaking = false;
+      respeakerBtn.disabled = false;
+    }
+  }
+  const respeakerBtn = $("respeakerBtn");
+  respeakerBtn.addEventListener("click", respeaker);
   // —— 保連音軌的「不碰麥克風」保鮮：換成無聲小檔、靜音、不動麥克風播 200ms。
   //
   // 【這不是解方，是診斷工具——別再把它當成修復手段】
@@ -1789,7 +1877,7 @@
     pulsing = true;
     const rider = warmRider(); // 與保連音軌同時播放，順便刷新它的播放授權
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
-    if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = false; floorAtOff = noiseFloor; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = false; floorAtOff = noiseFloor > -100 ? noiseFloor : null; }
     if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
     const wait = pulseWait;
     // 收尾（放開元素、收回麥克風）獨立成一個只跑一次的函式：訊號送不出去時
@@ -2068,14 +2156,7 @@
   }
   player.addEventListener("ended", () => { if (alerting && curEl() === player) stopAlert(); });
   // 手動按播放器的暫停也視為解除警報（stopAlert 自己觸發的 pause 進不來：alerting 已為 false）
-  player.addEventListener("pause", () => {
-    if (alerting && curEl() === player && !player.ended) {
-      stopAlert(true);
-      cooldownUntil = performance.now() + 30000;
-      logEvent("手動停止播放，30 秒內暫不重新觸發");
-      if (running) setStatus("listening", "監聽中…", "已手動停止，30 秒內暫不重新觸發");
-    }
-  });
+  player.addEventListener("pause", () => alertPaused(player));
 
   // minsOverride：手動播放時由選單當場指定；偵測觸發則沿用「觸發後播放時長」設定
   function trigger(reason, minsOverride) {
@@ -2116,6 +2197,10 @@
       alertEl = (okIdx >= 0 ? elPool.splice(okIdx, 1)[0] : elPool.shift())
         || warmEls.find(w => !w._inUse && w._unlockOK) || warmEls.find(w => !w._inUse) || player;
       const el = alertEl;
+      if (el._origin === "熱身" && !elPool.length && !poolDryLogged) {
+        poolDryLogged = true;
+        logEvent("🔧 元素池已用盡，之後改用熱身元素（沒有手勢就無法補鑄，「每次都用全新元素」的路由重新仲裁失效）");
+      }
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
@@ -2142,7 +2227,7 @@
         setStatus("alert", head + " 播放中…", "");
       }
       // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭
-      if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = true; floorAtOff = noiseFloor; }
+      if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = true; floorAtOff = noiseFloor > -100 ? noiseFloor : null; }
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
       setTimeout(async () => {
         // 淡出：為本輪建立專屬全新引擎；失敗或引擎劣化則自動退全音量（警報永遠有聲）。
@@ -2370,7 +2455,10 @@
           burstTimes.push(now);
           logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (burstF0Edge ? "⚠️邊界值" : "") + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，高出背景 " + Math.round(burstPeakDb - noiseFloor) + "dB，25 秒內第 " + burstTimes.length + " 聲）");
         }
-        burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstPeakDb = -120; burstF0Edge = false;
+        // burstF0Edge 不在這裡清除：它必須與 burstF0 同進退（burstF0 也不清）。
+        // v90 清了旗標卻留著 F0，而 trigger() 在同一幀稍後才跑，於是觸發行永遠拿不到
+        // 旗標——實測 08/22 02:13:57 同一秒，短聲行寫 F0≈960Hz⚠️邊界值、觸發行只寫 F0≈960Hz
+        burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstPeakDb = -120;
         cryMs = Math.max(0, cryMs - dt * 0.6);
       }
       while (burstTimes.length && now - burstTimes[0] > 25000) burstTimes.shift();
@@ -2395,7 +2483,11 @@
     burstVal.textContent = fuss ? burstTimes.length + " / 2" : "（哀叫模式未開）";
     // 背景心跳：頁面在背景時每 60 秒記一行，證明偵測迴圈確實還在跑。
     // 幀數同時透露計時器有沒有被 iOS 降頻（66ms 節奏約 900 幀／分鐘）
-    if (document.visibilityState === "visible") { bgT0 = 0; }
+    // 播放中不計數也不示警：那段期間麥克風本來就刻意離線、根本不偵測，而且 iOS 會把
+    // 隱藏頁面的計時器夾到 1Hz——那是預期行為不是故障。實測 08/22 19:42–19:50 一次
+    // 十分鐘的背景手動播放就寫了 9 行「請讓網頁保持在前景」，建議在那個當下還是錯的。
+    // 警報結束後視窗重新開始計數，真正監聽中的背景心跳與示警完全不受影響
+    if (document.visibilityState === "visible" || alerting) { bgT0 = 0; }
     else {
       if (!bgT0) { bgT0 = now; bgFrames = 0; bgPeak = -120; }
       bgFrames++;
@@ -2420,14 +2512,18 @@
     // 脈衝改成 :54 診斷就跟著跑到 :10，整夜每 4 分鐘一行，佔掉紀錄的一半。
     if (!micLive || now < calUntil) stat = null;
     else {
-    if (!stat) stat = { t0: now, n: 0, loud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestR: 0, bestF0: 0, mlB: 0, mlA: 0 };
+    if (!stat) stat = { t0: now, n: 0, loud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestDom: 0, bestR: 0, bestF0: 0, mlB: 0, mlA: 0 };
     if (mlFresh) { if (mlScore > stat.mlB) stat.mlB = mlScore; if (mlAdult > stat.mlA) stat.mlA = mlAdult; }
     stat.n++;
     if (loud) stat.loud++;
     if (babyPitch) stat.baby++;
     if (spectralCry) stat.spec++;
     if (adultVoice) stat.adult++;
-    if (db > stat.maxDb) stat.maxDb = db;
+    // 最大聲那一幀的頻譜峰值。v91 之後 estimatePitch 誠實很多（沒有真正的峰就回報
+    // 「無週期」，不再拿邊界假象湊數），所以 F0=0 的視窗變多——那時候能說出
+    // 「那個噪音在幾 Hz」的就只剩頻譜峰值。少了它，診斷行與「條件全滅」的警告
+    // 都會退化成一句「F0 一直是 0Hz」，等於把最有用的線索弄丟
+    if (db > stat.maxDb) { stat.maxDb = db; stat.bestDom = domFreq; }
     if (pe.r > stat.bestR) { stat.bestR = pe.r; stat.bestF0 = pe.f0; }
     if (now - stat.t0 > 10000) {
       // 「有明顯聲音」要真的明顯。舊條件 stat.loud > 5 是「600 幀裡有 5 幀」＝ 0.08 秒，
@@ -2445,7 +2541,7 @@
                    || (frac("loud") >= 0.02 && (frac("baby") >= 0.20 || frac("spec") >= 0.20));
       if (notable && !alerting) {
         const pc = k => Math.round(stat[k] / stat.n * 100) + "%";
-        logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : ""));
+        logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + " 峰頻" + stat.bestDom.toFixed(0) + "Hz" + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : ""));
         // 「聽得到聲音，但基頻與頻譜一個都沒過」＝ dspCry 的 (babyPitch || spectralCry)
         // 恆為假，寶寶再怎麼哭都觸發不了。迴圈活著、麥克風活著、紀錄照寫，只有偵測是死的——
         // v82 的迴圈看門狗看不到這一層。實測 08/16 16:15 重建後整整 30 分鐘都是這個狀態，
@@ -2457,7 +2553,8 @@
         deafRuns = (loudFrac >= 0.15 && stat.baby === 0 && stat.spec === 0) ? deafRuns + 1 : 0;
         if (deafRuns === DEAF_RUNS || (deafRuns > DEAF_RUNS && (deafRuns - DEAF_RUNS) % 30 === 0)) {
           logEvent("⚠️ 有聲音但偵測條件全滅約 " + Math.round(deafRuns * 10 / 60) + " 分鐘"
-            + "（基頻與頻譜連續 0%，F0 一直是 " + stat.bestF0.toFixed(0) + "Hz）"
+            + (stat.bestF0 ? "（基頻與頻譜連續 0%，F0 一直是 " + stat.bestF0.toFixed(0) + "Hz）"
+                              : "（基頻與頻譜連續 0%，聲音沒有週期性、頻譜峰值在 " + stat.bestDom.toFixed(0) + "Hz）")
             + "——這段時間哭聲可能觸發不了，請確認附近是否有持續的低頻噪音（電扇、除濕機、冷氣）");
         }
       }
