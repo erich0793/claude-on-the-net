@@ -169,7 +169,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v91</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v92</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1304,17 +1304,16 @@
     }
   }
 
-  // 音訊裝置變更：藍牙音響連上／斷線時多半會觸發（它的通話麥克風會進出裝置清單），
-  // 用來替「音響什麼時候掉的」蓋一個時間戳，才能跟保連脈衝的時間線對照
+  // 音訊裝置變更事件。08/24 那一整天（707 筆、藍牙確實從連線變成斷線）
+  // 這裡一行都沒寫出來，而舊版結尾是 .catch(() => {})，於是分不出到底是
+  //「iOS 不發這個事件」還是「發了但列舉失敗」——吞掉錯誤等於銷毀證據。
+  // 現在事件本身先記一行，之後的比對與示警一律交給 checkDevices()，
+  // 它不依賴這個事件（保連脈衝每 4 分鐘會再比一次）。
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener("devicechange", () => {
       if (!running) return;
-      navigator.mediaDevices.enumerateDevices().then(ds => {
-        const name = d => d.label || "未命名";
-        const outs = ds.filter(d => d.kind === "audiooutput").map(name);
-        const ins = ds.filter(d => d.kind === "audioinput").map(name);
-        logEvent("🔌 音訊裝置變更：輸出[" + (outs.join("、") || "未提供") + "]｜輸入[" + (ins.join("、") || "未提供") + "]");
-      }).catch(() => {});
+      logEvent("🔌 收到裝置變更事件");
+      checkDevices();
     });
   }
 
@@ -1364,6 +1363,8 @@
         }
       }
       logEvent("麥克風：" + ((stream.getAudioTracks()[0] || {}).label || "未知"));
+      checkDevices(true); // 建立裝置基準：之後每次麥克風重連都拿它比對
+
     } catch (e) {
       const timedOut = e && e.message === "麥克風逾時";
       logEvent("⚠️ 無法開啟麥克風（" + (timedOut ? "10 秒無回應" : (e && e.name) || "未知") + "）");
@@ -1419,6 +1420,66 @@
       if (builtin) builtinMicId = builtin.deviceId;
     } catch (e) {}
   }
+  // —— 藍牙裝置監看 ——
+  // 網頁沒有任何 API 能讀出「聲音現在從哪個喇叭出來」。但多數藍牙喇叭連上時，
+  // 它的通話麥克風會出現在 audioinput 清單裡（findBuiltinMic 就是為了避開它才寫的），
+  // 所以「它從清單消失」＝ 藍牙掉了。08/24 那次使用者是幾小時後才發現聲音跑到手機，
+  // 而整天 707 筆紀錄裡沒有任何線索：播放全部成功、保連脈衝 330 次全成功——
+  // 只是全部送到手機去了。
+  //
+  // 不依賴 devicechange：它在 iOS 上可能根本不發（08/24 整天一行都沒有）。
+  // 保連脈衝每 4 分鐘就會重新取得一次麥克風，那時順手列舉一次即可——
+  // 把既有的週期性動作當成免費輪詢，比等一個不一定會來的事件可靠得多。
+  const BUILTIN_RE = /iphone|ipad|built-?in|內建/i;
+  let devBase = null;   // 開始監聽當下的清單：判斷「本來有、現在沒了」的依據，中途不動
+  let devPrev = null;   // 上一次的清單：只有真的變動才寫紀錄
+  let devGone = [];     // 已經示警過、目前仍不在清單裡的外接裝置（節流用）
+  function devReset() { devBase = null; devPrev = null; devGone = []; }
+  async function checkDevices(baseline) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    let now;
+    try {
+      const ds = await navigator.mediaDevices.enumerateDevices();
+      now = ds.filter(d => d.kind === "audioinput").map(d => d.label).filter(Boolean);
+    } catch (e) {
+      // 吞掉錯誤等於銷毀證據：08/24 就是因為 .catch(() => {}) 而分不出
+      //「事件沒發生」與「列舉失敗」
+      logEvent("🔌 無法列舉音訊裝置（" + ((e && e.name) || "未知") + "）");
+      return;
+    }
+    if (baseline || !devBase) {
+      devBase = now.slice(); devPrev = now.slice(); devGone = [];
+      const ext = now.filter(n => !BUILTIN_RE.test(n));
+      logEvent("🔌 音訊輸入裝置：" + (now.join("、") || "未提供")
+        + (ext.length ? "" : "（沒有外接裝置——iOS 未揭露藍牙喇叭，斷線偵測對這台裝置無效）"));
+      return;
+    }
+    const added = now.filter(n => devPrev.indexOf(n) < 0);
+    const dropped = devPrev.filter(n => now.indexOf(n) < 0);
+    if (added.length || dropped.length) {
+      logEvent("🔌 音訊裝置變更"
+        + (added.length ? "｜新增[" + added.join("、") + "]" : "")
+        + (dropped.length ? "｜消失[" + dropped.join("、") + "]" : ""));
+    }
+    // 只對「開始監聽當下就在、而且不是內建麥克風」的裝置示警。
+    // 本來就不存在的東西不該叫——一個每天誤報的警告比沒有警告更糟
+    const miss = devBase.filter(n => !BUILTIN_RE.test(n) && now.indexOf(n) < 0 && devGone.indexOf(n) < 0);
+    if (miss.length) {
+      devGone = devGone.concat(miss);
+      logEvent("⚠️ 藍牙裝置「" + miss.join("、") + "」已從裝置清單消失——警報聲可能改從手機播出。"
+        + "請到 iPhone 的「設定 → 藍牙」重新連接喇叭（這個網頁修不了連線本身）");
+      if (running && !alerting) setStatus("alert", "藍牙裝置已消失",
+        "警報聲可能改從手機播出——請到 iPhone「設定 → 藍牙」重新連接喇叭");
+    }
+    const back = devGone.filter(n => now.indexOf(n) >= 0);
+    if (back.length) {
+      devGone = devGone.filter(n => now.indexOf(n) < 0);
+      logEvent("🔌 藍牙裝置「" + back.join("、") + "」已回到裝置清單");
+      if (running && !alerting) setStatus("listening", "監聽中…", "藍牙裝置已重新連上");
+    }
+    devPrev = now.slice();
+  }
+
   function micConstraints() {
     const c = { echoCancellation: false, noiseSuppression: false, autoGainControl: true };
     if (builtinMicId) c.deviceId = { exact: builtinMicId };
@@ -1465,6 +1526,7 @@
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
       calUntil = performance.now() + 2000;
+      checkDevices();
       // 這條路自己拿回麥克風，不經過 recoverMic——旗標要在這裡歸位，
       // 否則播放留下的 micOffPlaying 會讓下一次例行重連被誤標成「播放期間離線」
       micOffAt = 0; micOffPlaying = false;
@@ -1503,6 +1565,7 @@
       const track = stream.getAudioTracks()[0];
       if (track) track.addEventListener("ended", () => { if (running && !alerting) recoverMic(); });
       calUntil = performance.now() + 2000; // 重連後快速重校背景噪音基準，期間不觸發
+      checkDevices(); // 保連脈衝每 4 分鐘走這條——藍牙掉線最多 4 分鐘就會被蓋上時間戳
       // 若顯示藍牙裝置名即為路由問題的元兇；離線秒數用來抓「脈衝／播放後遲遲拿不回
       // 麥克風」的失聰空窗（背景時 getUserMedia 有被拖住的跡象）
       // 脈衝後的例行重連（silent 且空窗很短）不再自己佔一行——它每 4 分鐘必然出現一次、
@@ -1603,6 +1666,7 @@
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     keeperOff();
     freshOff();
+    devReset(); // 下次開始監聽重新建立裝置基準（中途換喇叭不該被當成「消失」）
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
     logEvent("停止監聽");
