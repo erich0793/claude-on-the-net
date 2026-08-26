@@ -129,6 +129,13 @@
     background: transparent; border: 1.5px solid var(--muted); box-shadow: none;
   }
   .cry.fuss.bad { background: transparent; border-color: var(--danger); }
+  /* 監聽時段的底色：時間表上的「空白」以前是歧義的——沒開偵測與沒哭長得一樣。
+     半透明，底下的 6/12/18 時刻度線才不會被蓋掉 */
+  .wspan { background: rgba(77,171,247,.13); }
+  .track .wspan { position: absolute; top: 0; bottom: 0; }
+  /* 監聽中但麥克風其實斷了。這是警訊，顏色要壓過藍色——
+     跟正常監聽同色的話，底色反而會給出錯誤的安心感 */
+  .wspan.deaf { background: rgba(255,107,107,.55); }
   .legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-top: 8px; align-items: center; }
   .legend i { display: inline-block; vertical-align: middle; margin-right: 5px; position: static; }
   .hours { display: grid; grid-template-columns: 62px 1fr 46px; gap: 10px; font-size: 10px; color: var(--muted); }
@@ -169,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v93</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v94</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -259,6 +266,7 @@
     <div id="cryDays"></div>
     <div class="hours" id="cryAxis" style="display:none; margin-top:6px"><div></div><div><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div><div></div></div>
     <div class="legend" id="cryLegend" style="display:none"><span><i class="cry" style="position:static"></i>持續哭聲</span><span><i class="cry fuss" style="position:static"></i>哀叫</span><span><i class="cry bad" style="position:static"></i>沒播出來</span><span>右邊次數＝哭泣／全部</span></div>
+    <div class="legend" id="watchLegend" style="display:none"><span><span class="wspan" style="position:static; display:inline-block; width:14px; height:10px; border-radius:2px; vertical-align:middle; margin-right:5px"></span>監聽中</span><span><span class="wspan deaf" style="position:static; display:inline-block; width:14px; height:10px; border-radius:2px; vertical-align:middle; margin-right:5px"></span>監聽中但聽不見</span><span>沒有底色＝當時沒開偵測</span></div>
     <div class="row" style="margin-top:12px">
       <button id="cryMoreBtn" style="font-size:12px; padding:6px 12px; display:none">顯示更多天</button>
       <button id="cryClearBtn" style="font-size:12px; padding:6px 12px; display:none">清除時間表</button>
@@ -512,6 +520,49 @@
   // 必須宣告在這裡：renderCry() 在頁面載入時就會讀它，放到播放區才宣告會踩到
   // let 的暫時性死區，整個時間表會靜靜地不渲染（實測就是這樣壞掉的）
   let maxDry = 0;
+  // —— 監聽時段紀錄（v94）：時間表上的「空白」以前是歧義的——
+  // 它可能是「寶寶睡得很好」，也可能是「當時根本沒開監聽」，而兩者長得一模一樣。
+  // w＝有在監聽的時段、d＝監聽中但麥克風其實斷了（畫面寫著監聽中，實際是聾的）。
+  // 第二層有實據：08/25 13:30–13:34 那三分半，畫面顯示監聽中但麥克風拿不回來——
+  // 那種時段如果跟正常監聽同色，底色反而會給出錯誤的安心感，比沒有底色更糟
+  let watchArr = { w: [], d: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem("watchlog") || "null");
+    if (raw && Array.isArray(raw.w) && Array.isArray(raw.d)) watchArr = raw;
+  } catch (e) {}
+  const WATCH_JOIN_MS = 60000; // 間隔小於這個就接續前一段：按錯兩下不該產生一堆碎片
+  function watchSave(quiet) {
+    const cut = Date.now() - CRY_DAYS * 86400000;
+    const keep = a => a.filter(x => x[1] >= cut).map(x => [Math.max(x[0], cut), x[1]]);
+    watchArr = { w: keep(watchArr.w), d: keep(watchArr.d) };
+    try { localStorage.setItem("watchlog", JSON.stringify(watchArr)); } catch (e) {}
+    if (!quiet) renderCry();
+  }
+  // 開始監聽：開一段新的，或接續剛剛那一段
+  function watchOpen() {
+    const now = Date.now(), last = watchArr.w[watchArr.w.length - 1];
+    if (!(last && now - last[1] < WATCH_JOIN_MS)) watchArr.w.push([now, now]);
+    watchSave();
+  }
+  // 心跳：iOS 會無預警殺掉分頁，stop() 不保證跑得到。只靠「結束事件」的話，
+  // 最後一段永遠不會被關閉，圖上會顯示成監聽到天荒地老。
+  // 30 秒的心跳讓最壞情況只差 30 秒——對 24 小時的軸來說遠遠夠用
+  function watchBeat() {
+    const last = watchArr.w[watchArr.w.length - 1];
+    if (!last) return;
+    last[1] = Date.now();
+    // 靜默寫入：每 30 秒重畫一次時間表會把使用者剛展開的那一天收合掉。
+    // 切到「紀錄」分頁時會重畫一次，看到的就是最新的
+    watchSave(true);
+  }
+  function watchClose() { watchBeat(); renderCry(); }
+  // 監聽中卻聽不見的一段。播放中與保連脈衝關麥克風是設計行為、使用者也知道，
+  // 不算失聰——只有「應該在聽卻聽不到」才算，門檻沿用既有的 10 秒
+  function deafAdd(from, to) {
+    if (to - from < 10000) return;
+    watchArr.d.push([from, to]);
+    watchSave();
+  }
   function crySave() {
     const cut = Date.now() - CRY_DAYS * 86400000;
     cryArr = cryArr.filter(c => c.t >= cut);
@@ -525,6 +576,14 @@
     return rec; // 回傳讓呼叫端在播放塵埃落定後補寫 ok
   }
   const dayKey = t => { const d = new Date(t); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate(); };
+  // 當天 00:00 的時戳：底色要依「當地時間的一天」裁切，跨午夜的監聽才會正確分成兩列
+  const dayStart = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  // 日期鍵沒有補零（"2025-8-9"），純字串排序會把 9 號排在 10 號後面。
+  // 30 天的資料一定會跨過這個界線，所以要照數字比
+  const cmpDayKey = (a, b) => {
+    const x = a.split("-").map(Number), y = b.split("-").map(Number);
+    return (x[0] - y[0]) || (x[1] - y[1]) || (x[2] - y[2]);
+  };
   function renderCry() {
     const sum = $("crySum"), box = $("cryDays");
     const all = cryMode === "all";
@@ -532,7 +591,16 @@
     // 這個數字決定「保連訊號到底有沒有用」的實驗：要超過上次出事的長度才算通過
     const dry = maxDry ? "｜本次監聽最長無音樂 <b style='color:var(--text)'>" + fmtDry(maxDry) + "</b>" : "";
     $("cryLegend").style.display = all ? "" : "none";
-    if (!cries.length) {
+    // 監聽時段也要能自己撐起一列：整天在監聽卻一次都沒哭，以前整天不會出現在圖上，
+    // 於是「昨天很平安」和「昨天忘了開」長得一模一樣
+    const spanDays = a => {
+      const set = {};
+      a.forEach(x => { for (let t = dayStart(x[0]); t < x[1]; t += 86400000) set[dayKey(t)] = 1; });
+      return set;
+    };
+    const watchDays = spanDays(watchArr.w);
+    $("watchLegend").style.display = (watchArr.w.length || watchArr.d.length) ? "" : "none";
+    if (!cries.length && !Object.keys(watchDays).length) {
       sum.innerHTML = "還沒有紀錄——偵測到" + (all ? "<b style='color:var(--text)'>哭泣或哀叫</b>" : "<b style='color:var(--text)'>持續哭聲</b>")
         + "並播放後，這裡會逐日累積" + (all ? "。" : "（短促的哀叫不計入）。") + dry;
       box.innerHTML = ""; $("cryAxis").style.display = "none";
@@ -544,7 +612,11 @@
     // 依日分組（新的在上）
     const byDay = {};
     cries.forEach(c => { (byDay[dayKey(c.t)] = byDay[dayKey(c.t)] || []).push(c); });
-    const keys = Object.keys(byDay).sort().reverse();
+    // 日期是「有哭聲的日子」∪「有監聽的日子」的聯集
+    const keySet = {};
+    Object.keys(byDay).forEach(k => { keySet[k] = 1; });
+    Object.keys(watchDays).forEach(k => { keySet[k] = 1; });
+    const keys = Object.keys(keySet).sort(cmpDayKey).reverse();
     const today = dayKey(Date.now()), yst = dayKey(Date.now() - 86400000);
     const wk = cries.filter(c => c.t >= Date.now() - 7 * 86400000).length;
     // 合併模式下另外標出其中有幾次是真的哭——不然「今天 40 次」看不出嚴重程度
@@ -557,8 +629,24 @@
     const pad = n => (n < 10 ? "0" : "") + n;
     const show = cryShowAll ? keys : keys.slice(0, 7);
     box.innerHTML = show.map(k => {
-      const list = byDay[k].slice().sort((a, b) => a.t - b.t);
-      const d = new Date(list[0].t);
+      const list = (byDay[k] || []).slice().sort((a, b) => a.t - b.t);
+      // 日期要從鍵本身算，不能靠 list[0]——只有監聽、一次都沒哭的日子是空的
+      const kp = k.split("-").map(Number);
+      const d = new Date(kp[0], kp[1] - 1, kp[2]);
+      const t0 = d.getTime(), t1 = t0 + 86400000;
+      // 底色：把時段裁切到當天，再換算成百分比。跨午夜的一段會自然分到兩列去
+      const band = (arr, cls, minW) => arr.map(x => {
+        const a2 = Math.max(x[0], t0), b2 = Math.min(x[1], t1);
+        if (b2 <= a2) return "";
+        const L = (a2 - t0) / 86400000 * 100;
+        // 最小寬度：30 秒的失聰在 24 小時軸上只有 0.03%，照實畫等於沒畫——
+        // 而那正是最需要被看見的東西
+        const W = Math.max((b2 - a2) / 86400000 * 100, minW);
+        return '<span class="wspan' + cls + '" style="left:' + L.toFixed(2) + '%;width:' + Math.min(W, 100 - L).toFixed(2) + '%"></span>';
+      }).join("");
+      // 先畫底色再畫點：點要在上面
+      // 失聰用比較大的最小寬度：它是警訊，不該比背景還難找到
+      const bands = band(watchArr.w, "", 0.3) + band(watchArr.d, " deaf", 0.6);
       const dots = list.map(c => {
         const x = new Date(c.t);
         const pct = ((x.getHours() * 60 + x.getMinutes()) / 1440 * 100).toFixed(2);
@@ -573,7 +661,7 @@
       }).join("　");
       return '<div class="day" data-k="' + k + '">'
         + '<span class="dlabel">' + (d.getMonth() + 1) + "/" + pad(d.getDate()) + "（" + wd[d.getDay()] + "）</span>"
-        + '<span class="track">' + dots + "</span>"
+        + '<span class="track">' + bands + dots + "</span>"
         + '<span class="dcount">' + (all ? cryOnly(list) + "／" : "") + list.length + " 次</span></div>"
         + '<div class="dayrows" data-rows="' + k + '" style="display:none">' + times + "</div>";
     }).join("");
@@ -595,7 +683,10 @@
     renderCry();
   });
   $("cryClearBtn").addEventListener("click", () => {
-    cryArr = []; localStorage.removeItem("crylog"); renderCry();
+    cryArr = []; localStorage.removeItem("crylog");
+    // 底色紀錄一起清：只清點的話會剩下一堆有底色卻沒有點的空列，更難看懂
+    watchArr = { w: [], d: [] }; localStorage.removeItem("watchlog");
+    renderCry();
     logEvent("📄 哭泣時間表已清除");
   });
   renderCry();
@@ -718,6 +809,7 @@
   // 剛結束的那一聲有多長、比背景大多少。**只活一幀**：在短聲結算時寫入、
   // 觸發判斷跑完立刻歸零，否則舊值會在之後每一幀重複觸發單聲路徑
   let soloBurstMs = 0, soloBurstDb = -120;
+  let micDownSince = 0; // 「應該在聽卻聽不到」的起點（0＝目前聽得見）
   let stat = null; // 每 10 秒的診斷統計：有聲音卻沒觸發時自動寫入事件紀錄
 
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn"), manualBtn = $("manualBtn");
@@ -1164,6 +1256,7 @@
       if (on) b.classList.remove("warn"); // 看過就把紅點收掉
     });
     window.scrollTo({ top: 0 });
+    if (id === "paneLog") renderCry(); // 心跳是靜默寫入的，切過來時補畫一次
   }
   tabBtns.forEach(b => b.addEventListener("click", () => showPane(b.dataset.pane)));
 
@@ -1442,6 +1535,7 @@
     deafRuns = 0; // 「全滅了幾分鐘」是這一次監聽的數字，不該跨越停止／重新開始
     // 開始監聽時沒有可信的前值，首次校準必須放手學習房間真正的背景
     floorAtOff = null; clampLogged = 0;
+    watchOpen(); // 時間表的底色：記下「從這一刻開始有在聽」
     logEvent("開始監聽（" + (trigMode.value === "fuss" ? "哭泣＋哀叫" : "僅哭泣") + "，靈敏度 " + sens.value + "%）"
       + "，取樣率 " + audioCtx.sampleRate + "Hz"
       + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
@@ -1675,6 +1769,7 @@
   const ALIVE_MIN = 10, WATCH_MS = 30000;
   let lastTicks = -1, stallSince = 0, lastStallLog = 0;
   setInterval(() => {
+    if (running) watchBeat(); // 搭便車寫底色紀錄的心跳：不另開一個計時器
     if (!running) { lastTicks = -1; stallSince = 0; lastStallLog = 0; return; }
     const now = Date.now();
     if (lastTicks >= 0 && loopTicks - lastTicks < ALIVE_MIN) {
@@ -1708,6 +1803,9 @@
     keeperOff();
     freshOff();
     devReset(); // 下次開始監聽重新建立裝置基準（中途換喇叭不該被當成「消失」）
+    // 還沒結算的失聰段要在這裡結掉：留到下一次監聽的話，會跨越整段停機時間變成一大段
+    if (micDownSince) { deafAdd(micDownSince, Date.now()); micDownSince = 0; }
+    watchClose(); // 底色記錄收尾：結束時間定在當下
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
     logEvent("停止監聽");
@@ -2495,6 +2593,11 @@
     // 否則靜音會把基準拖到 -100dB 以下，重連後整整一分鐘任何聲音都「音量爆表」
     const tk = stream && stream.getAudioTracks()[0];
     const micLive = !!(tk && tk.readyState === "live") && audioCtx.state === "running";
+    // 時間表底色的第二層：「應該在聽卻聽不到」。播放中與保連脈衝關麥克風是設計行為、
+    // 使用者當下也知道，不算失聰；只計那些沒有理由的空窗（門檻沿用既有的 10 秒，
+    // 例行的 6 秒脈衝不會入列）。08/25 13:30–13:34 那三分半就是靠這條記下來的
+    if (running && !alerting && !pulsing && !micLive) { if (!micDownSince) micDownSince = Date.now(); }
+    else if (micDownSince) { deafAdd(micDownSince, Date.now()); micDownSince = 0; }
     if (micLive) { updateNoiseFloor(db, dt, now < calUntil); lastDb = db; }
     // AI 取音：把每幀新增的樣本從波形快照尾端拼進緩衝（連續 PCM 近似，不掛任何音訊節點）
     if (micLive && mlReady && mlCk.checked && mlBuf) {
