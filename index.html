@@ -169,7 +169,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v92</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v93</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -335,6 +335,7 @@
     <div class="ctl" style="margin-top:14px">
       <label><span>靈敏度（越右越容易觸發）</span><span id="sensVal"></span></label>
       <input type="range" id="sens" min="0" max="100" value="55" />
+      <div class="hint" id="sensHint" style="margin-top:4px"></div>
     </div>
     <div class="ctl" style="margin-top:14px">
       <label><span>需持續時間（毫秒，避免瞬間雜音誤觸）</span><span id="durVal"></span></label>
@@ -496,6 +497,10 @@
   // 這裡要的是能留一個月、看得出作息規律的稀疏資料。
   const CRY_DAYS = 30;
   const CRY_REASON = "持續哭聲", FUSS_REASON = "短聲達標";
+  // 高靈敏度才會啟用的第三條觸發路徑：夠長又夠大聲的「單獨一聲」。
+  // 一定要跟「短聲達標」分開——這是新路徑，帶來的誤觸必須在紀錄上指得出來，
+  // 沿用舊名稱就等於把它藏進既有數字裡，下次又只能靠猜
+  const SOLO_REASON = "單聲達標";
   let cryArr = [];
   try { cryArr = JSON.parse(localStorage.getItem("crylog") || "[]"); } catch (e) {}
   let cryShowAll = false;
@@ -523,7 +528,7 @@
   function renderCry() {
     const sum = $("crySum"), box = $("cryDays");
     const all = cryMode === "all";
-    const cries = cryArr.filter(c => c.why === CRY_REASON || (all && c.why === FUSS_REASON));
+    const cries = cryArr.filter(c => c.why === CRY_REASON || (all && (c.why === FUSS_REASON || c.why === SOLO_REASON)));
     // 這個數字決定「保連訊號到底有沒有用」的實驗：要超過上次出事的長度才算通過
     const dry = maxDry ? "｜本次監聽最長無音樂 <b style='color:var(--text)'>" + fmtDry(maxDry) + "</b>" : "";
     $("cryLegend").style.display = all ? "" : "none";
@@ -558,7 +563,7 @@
         const x = new Date(c.t);
         const pct = ((x.getHours() * 60 + x.getMinutes()) / 1440 * 100).toFixed(2);
         // 沒播出來的用紅點：哪一晚失聰過會自己現形，不必再爬事件紀錄
-        return '<i class="cry' + (c.why === FUSS_REASON ? " fuss" : "") + (c.ok === false ? " bad" : "")
+        return '<i class="cry' + (c.why !== CRY_REASON ? " fuss" : "") + (c.ok === false ? " bad" : "")
           + '" style="left:' + pct + '%"></i>';
       }).join("");
       const times = list.map(c => {
@@ -710,6 +715,9 @@
   let cryMs = 0, lastT = 0, lastWatchdog = 0, lastInfer = 0;
   let burstMs = 0, burstTimes = []; // 哀叫模式：合格短聲的發生時刻
   let burstStrongMs = 0, burstBestR = 0, burstF0 = 0, burstF0Edge = false; // 短聲的品質統計：清晰嬰兒基頻的時長與峰值
+  // 剛結束的那一聲有多長、比背景大多少。**只活一幀**：在短聲結算時寫入、
+  // 觸發判斷跑完立刻歸零，否則舊值會在之後每一幀重複觸發單聲路徑
+  let soloBurstMs = 0, soloBurstDb = -120;
   let stat = null; // 每 10 秒的診斷統計：有聲音卻沒觸發時自動寫入事件紀錄
 
   const forgetBtn = $("forgetBtn"), dlBtn = $("dlBtn"), manualBtn = $("manualBtn");
@@ -1016,7 +1024,22 @@
   function refreshLabels() {
     sensVal.textContent = sens.value + "%";
     durVal.textContent = dur.value + " ms";
+    // 滑桿現在真的有作用了，就必須讓人看得出它做了什麼——
+    // 這個專案已經在「沉默的機制」上吃過好幾次虧
+    // 不可以用 const trigMode——它在檔案後段才宣告，而 refreshLabels() 在初始化時
+    // 就會跑，會踩到暫時性死區（v81 的 maxDry 就是這樣讓時間表整個不渲染）。
+    // 直接讀 DOM 沒有這個問題
+    const tm = document.getElementById("trigMode");
+    const k = sensK(), fuss = tm && tm.value === "fuss";
+    sensHint.innerHTML = fuss
+      ? "音量需高出背景 <b>" + (3 - 1.5 * k).toFixed(1) + "dB</b>"
+        + "｜<b>" + Math.round(burstWinMs() / 1000) + " 秒</b>內 2 聲哀叫就觸發"
+        + "｜單獨一聲：" + (k > 0
+            ? "<b>≥" + (soloMs() / 1000).toFixed(2) + " 秒</b>且<b>高出背景 ≥" + Math.round(soloDb()) + "dB</b> 也觸發"
+            : "<b>不觸發</b>（靈敏度需高於 55%）")
+      : "音量需高出背景 <b>" + loudMarginDb().toFixed(1) + "dB</b>｜哭聲需持續累積夠久才觸發";
   }
+  const sensHint = $("sensHint");
   sens.addEventListener("input", refreshLabels);
   dur.addEventListener("input", refreshLabels);
   // 沿用上次在這台裝置調好的值：這兩項是每晚實際在用的偵測參數，
@@ -1105,6 +1128,24 @@
     }
   }
   // 靈敏度 -> 需高出背景噪音的幅度：0% => +22dB，100% => +5dB
+  // 靈敏度係數：0 ＝ 預設 55%、1 ＝ 100%、-1 ＝ 0%。
+  // 55% 時所有導出值都與 v92 逐字相同——不動滑桿的人不受任何影響，
+  // 而動了滑桿的人，觀察到的差異可以完全歸因到滑桿本身。
+  //
+  // 為什麼要有這個東西：靈敏度滑桿在「哭泣＋哀叫」模式裡幾乎是空轉的。
+  // dspGate = fuss ? weakLoud : loud，而 weakLoud 是寫死的「高出背景 3dB」，
+  // 短聲的長度／品質門檻與「25 秒內 2 聲」也全是常數——滑桿只動得到 loud
+  // 與 AI 門檻，而哀叫模式的 DSP 路徑根本不看 loud。
+  // 08/26 使用者說「小孩哭前面叫幾聲比較不靈敏」，紀錄顯示那些叫聲**都有被記成短聲**
+  //（01:44:11 那一聲 0.7 秒、高出背景 16dB），只是 25 秒內湊不到第二聲。
+  // 門在配對規則，不在音量也不在音高——所以要調的是配對規則。
+  function sensK() { const v = +sens.value; return v >= 55 ? (v - 55) / 45 : (v - 55) / 55; }
+  // 兩聲的配對窗口：0%→15 秒、55%→25 秒（現狀）、100%→45 秒
+  function burstWinMs() { const k = sensK(); return 25000 + (k >= 0 ? 20000 * k : 10000 * k); }
+  // 單聲直接觸發的門檻（只有 k > 0 才啟用）：90%→0.55 秒／16dB、100%→0.45 秒／14dB
+  function soloMs() { return 900 - 450 * sensK(); }
+  function soloDb() { return 22 - 8 * sensK(); }
+
   function loudMarginDb() {
     return 22 - (+sens.value / 100) * 17;
   }
@@ -2115,7 +2156,8 @@
   const trigMode = $("trigMode");
   trigMode.value = localStorage.getItem("trigMode") || "cry";
   if (trigMode.selectedIndex < 0) trigMode.value = "cry";
-  trigMode.addEventListener("change", () => { localStorage.setItem("trigMode", trigMode.value); burstTimes = []; });
+  refreshLabels(); // 觸發條件是在這裡才從 localStorage 還原的，說明列要重畫一次
+  trigMode.addEventListener("change", () => { localStorage.setItem("trigMode", trigMode.value); burstTimes = []; refreshLabels(); });
 
   // 麥克風專用的 AudioContext（#player 不再被任何引擎捕捉，試聽為純元素播放；
   // 淡出改由每輪播放專屬的 fadeCtx 搭配池元素實現）
@@ -2239,7 +2281,7 @@
       const trigF0Edge = burstF0 ? burstF0Edge : false; // 只有沿用 burstF0 時才知道旗標
       // 兩種偵測觸發都記下來，圖上要不要畫由 cryMode 決定（手動播放是你按的，不記）。
       // v81 當時是「不記錄」哀叫，導致想回頭看也看不到——過濾要留在呈現層，不要留在寫入層
-      const cryRec = (reason === CRY_REASON || reason === FUSS_REASON) ? cryAdd(reason, trigF0) : null;
+      const cryRec = (reason === CRY_REASON || reason === FUSS_REASON || reason === SOLO_REASON) ? cryAdd(reason, trigF0) : null;
       const head = isManual ? "手動播放" : "偵測到哭聲！";
       // 一律使用從未播放過的池元素（無工作階段歷史，路由重新仲裁）；#player 僅供試聽。
       // 淡出僅手動播放嘗試：警報無手勢、淡出引擎必被 iOS 拒絕（實測 100%），
@@ -2484,7 +2526,7 @@
     // 沙啞尖叫（hyperphonation/dysphonation）週期性弱，用頻譜條件備援
     const spectralCry = domFreq >= 250 && domFreq <= 2000 && peakMag > (fuss ? 30 : 40) && ratio > (fuss ? 0.3 : 0.35);
     // 基頻明確是嬰兒聲時，本身就是強證據——哀叫模式下只需比背景稍大聲即可
-    const weakLoud = db > Math.max(-62, noiseFloor + 3);
+    const weakLoud = db > Math.max(-62, noiseFloor + 3 - 1.5 * sensK()); // 55%＝+3dB（同 v92）
     // AI 融合原則：AI 只能「加分」（新增獨立觸發路徑）與「否決明確的大人語音」，
     // 絕不收緊傳統偵測——YAMNet 對還沒大哭的哀叫分數偏低，讓它守門會漏接（v34 教訓）
     const mlFresh = mlReady && mlCk.checked && (now - mlAt < 2500);
@@ -2517,7 +2559,9 @@
         const bStrongNeed = fuss ? 80 : 120;
         if (burstMs >= bMinMs && (burstStrongMs >= bStrongNeed || (mlFresh && mlScore >= mlThr * 0.6))) {
           burstTimes.push(now);
-          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (burstF0Edge ? "⚠️邊界值" : "") + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，高出背景 " + Math.round(burstPeakDb - noiseFloor) + "dB，25 秒內第 " + burstTimes.length + " 聲）");
+          // 單聲路徑只採計「已經通過長度與品質關卡」的一聲，不是任何一段聲音
+          soloBurstMs = burstMs; soloBurstDb = burstPeakDb - noiseFloor;
+          logEvent("偵測到短聲（" + (burstMs / 1000).toFixed(1) + " 秒，F0≈" + burstF0.toFixed(0) + "Hz" + (burstF0Edge ? "⚠️邊界值" : "") + (mlFresh ? "，AI " + Math.round(mlScore * 100) + "%" : "") + "，高出背景 " + Math.round(burstPeakDb - noiseFloor) + "dB，" + Math.round(burstWinMs() / 1000) + " 秒內第 " + burstTimes.length + " 聲）");
         }
         // burstF0Edge 不在這裡清除：它必須與 burstF0 同進退（burstF0 也不清）。
         // v90 清了旗標卻留著 F0，而 trigger() 在同一幀稍後才跑，於是觸發行永遠拿不到
@@ -2525,11 +2569,17 @@
         burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstPeakDb = -120;
         cryMs = Math.max(0, cryMs - dt * 0.6);
       }
-      while (burstTimes.length && now - burstTimes[0] > 25000) burstTimes.shift();
+      while (burstTimes.length && now - burstTimes[0] > burstWinMs()) burstTimes.shift();
       // 沒有還在等待的證據，就沒有峰值可留——否則半小時前的一聲巨響會灌進下一次觸發
       if (cryMs === 0 && burstTimes.length === 0) evPeakDb = -120;
-      if (cryMs >= +dur.value) trigger("持續哭聲");                 // 持續哭聲
-      else if (fuss && burstTimes.length >= 2) trigger("短聲達標"); // 25 秒內 2 聲哀叫
+      if (cryMs >= +dur.value) trigger(CRY_REASON);                    // 持續哭聲
+      else if (fuss && burstTimes.length >= 2) trigger(FUSS_REASON);   // 配對窗口內 2 聲哀叫
+      // 第三條路：高靈敏度時，夠長又夠大聲的「單獨一聲」不必等第二聲。
+      // 08/26 01:44:11 那一聲（0.7 秒、高出背景 16dB）等了兩分鐘才等到夥伴，
+      // 而那正是使用者說「叫幾聲卻沒反應」的情境。只在 k > 0 時啟用，
+      // 55%（預設）完全關閉——不動滑桿的人拿到的行為與 v92 逐字相同
+      else if (fuss && sensK() > 0 && soloBurstMs >= soloMs() && soloBurstDb >= soloDb()) trigger(SOLO_REASON);
+      soloBurstMs = 0; soloBurstDb = -120; // 用完即丟：這是單幀訊號
     }
 
     // 5) UI 更新
