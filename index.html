@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v95</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v96</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1290,6 +1290,8 @@
   // 「一律使用從未播放過的元素、讓 iOS 重新仲裁路由」這條設計原則每天晚上都默默失效，
   // 而紀錄上完全看不出來——路由跑到手機時，這是必須能對照的一項
   let poolDryLogged = false;
+  // 見底「之前」的預警：補池需要手勢，使用者要先知道才會去碰畫面
+  let poolLowLogged = false;
   function curEl() { return alertEl || player; }
   // 元素身分標記：播放被 iOS 擋下時，靠編號／出身／年齡才能判斷是
   //「一開始就沒解鎖」還是「解鎖後擱置太久失效」
@@ -1365,7 +1367,7 @@
       logEvent("🔧 已淘汰 " + dead.length + " 顆未取得播放權的元素，重新解鎖");
     }
     const before = elPool.length;
-    if (elPool.length < POOL_N) poolDryLogged = false; // 有補進新元素就重新計一次
+    if (elPool.length < POOL_N) { poolDryLogged = false; poolLowLogged = false; } // 有補進新元素就重新計一次
     while (elPool.length < POOL_N) {
       const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
       el._born = Date.now();
@@ -2000,6 +2002,20 @@
   // 熱身元素最後一次「真的被成功刷新」的時戳。這是無聲保鮮要不要接手的唯一依據——
   // 不可以改用「保連脈衝在不在跑」當代理指標，08/12 就是這樣整晚失聲的（見 freshPulse）
   let lastWarmOK = 0;
+  // 挑一顆熱身元素當警報：要「輪流」，不可以每次都挑第一顆。
+  // 原本兩條取用路徑（首選與重試）都是 warmEls.find(...)，而 find 永遠回傳第一個符合的——
+  // 08/29 11:53 池空之後到 13:11 為止的每一次觸發都是「熱身元素#1」，同一顆連播十幾次，
+  // 使用者回報有幾次是從手機出來的。「每次都用全新元素讓 iOS 重新仲裁路由」這招之所以
+  // 有效，靠的就是元素不重複；備援路徑卻把另外兩顆現成的輪替品晾在旁邊沒用。
+  // 挑最久沒當過警報的那一顆（沒當過的 _lastAlert 是 0，自然排最前面）。
+  function pickWarm(needOK) {
+    let best = null;
+    warmEls.forEach(w => {
+      if (w._inUse || (needOK && !w._unlockOK)) return;
+      if (!best || (w._lastAlert || 0) < (best._lastAlert || 0)) best = w;
+    });
+    return best;
+  }
   function unlockWarm() {
     while (warmEls.length < 3) {
       const w = new Audio(keepWavUrl());
@@ -2428,8 +2444,17 @@
         logEvent("⚠️ 備援元素已全滅（元素池空，熱身元素全部失去播放授權）——這次很可能只會發出嗶聲，請碰一下畫面補滿元素池");
         setStatus("alert", "備援元素已全滅", "請碰一下畫面（任何位置）補滿元素池，否則接下來的觸發只會有嗶聲");
       }
+      // 池快見底時要先講。原本只有「已經用完」才寫一行，那時已經來不及了——
+      // 補池需要使用者手勢，而使用者要先知道才會去碰畫面。08/29 上午 11:07–11:53
+      // 46 分鐘內觸發 13 次把 12 顆一次抽乾，中間完全沒有任何預警。
+      // 門檻訂 3：以那天的節奏（約 3.5 分鐘一次）還有十分鐘可以反應。
+      if (elPool.length && elPool.length <= 3 && !poolLowLogged) {
+        poolLowLogged = true;
+        logEvent("🔧 元素池只剩 " + elPool.length + " 顆——用完之後會改用熱身元素輪流接手（仍會出聲，但路由重新仲裁的效果會變差）。方便的話碰一下畫面補滿。");
+      }
       alertEl = (okIdx >= 0 ? elPool.splice(okIdx, 1)[0] : elPool.shift())
-        || warmEls.find(w => !w._inUse && w._unlockOK) || warmEls.find(w => !w._inUse) || player;
+        || pickWarm(true) || pickWarm(false) || player;
+      if (alertEl && alertEl._origin === "熱身") alertEl._lastAlert = Date.now();
       const el = alertEl;
       if (el._origin === "熱身" && !elPool.length && !poolDryLogged) {
         poolDryLogged = true;
@@ -2487,10 +2512,13 @@
           try { el2.currentTime = 0; } catch (e) {}
           return el2;
         };
-        const nextEl = () => elPool.shift()
-          || warmEls.find(w => !w._inUse && w._unlockOK)
-          || warmEls.find(w => !w._inUse)
-          || (curEl() !== player ? player : null);
+        // 重試路徑也要輪流（見 pickWarm）：被擋下來時更不該把同一顆再遞一次
+        const nextEl = () => {
+          const el2 = elPool.shift() || pickWarm(true) || pickWarm(false)
+            || (curEl() !== player ? player : null);
+          if (el2 && el2._origin === "熱身") el2._lastAlert = Date.now();
+          return el2;
+        };
         const tryPlay = el2 => {
           const pr = el2.play();
           if (!pr) { playStarted = true; return; }
