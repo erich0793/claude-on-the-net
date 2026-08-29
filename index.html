@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v94</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v95</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -799,6 +799,8 @@
   let audioCtx, analyser, source, stream, rafId, loopTimer = null;
   let freqData, timeData;
   let running = false, alerting = false;
+  // 手動播放結束時頁面在背景，自動接手被延到回前景才做（見 visibilitychange）
+  let pendingAutoStart = false;
   // 最近一次使用者手勢的時刻。播放被 pause 掉時要靠它分辨是「使用者按的」還是
   // 「系統中斷的（音訊路由改變、藍牙斷線）」——08/22 20:55 那次寫成「手動停止播放」，
   // 但連使用者自己都不確定是不是他按的，等於把最關鍵的一條線索寫死了
@@ -1472,6 +1474,8 @@
   async function start() {
     if (starting || running) return;
     starting = true;
+    pendingAutoStart = false; // 使用者自己按了，或延後的接手已經啟動：旗標任務結束
+    const startT0 = Date.now(); // 逾時訊息要講真話：背景分頁計時器被凍結時，實際等待遠不只 10 秒
     startBtn.disabled = true; // 立刻停用（過去要等 getUserMedia 成功才停，那 3–4 秒是重入破口）
     setStatus("", "正在開啟麥克風…", "第一次使用會跳出授權詢問，請選「允許」");
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
@@ -1501,9 +1505,15 @@
 
     } catch (e) {
       const timedOut = e && e.message === "麥克風逾時";
-      logEvent("⚠️ 無法開啟麥克風（" + (timedOut ? "10 秒無回應" : (e && e.name) || "未知") + "）");
+      // 寫死的「10 秒」會讓人以為只等了 10 秒。08/28 那次實際上等了 12 分鐘——
+      // 頁面在背景，計時器被凍結，逾時直到使用者拿起手機才跑完。
+      // 數字遠大於 10 秒，本身就是「這是背景造成的」最直接的線索
+      const waited = Math.round((Date.now() - startT0) / 1000);
+      logEvent("⚠️ 無法開啟麥克風（" + (timedOut ? waited + " 秒無回應" : (e && e.name) || "未知") + "）");
       setStatus("alert", "無法開啟麥克風",
-        timedOut ? "麥克風沒有回應（多半是前一個分頁還占著）。可直接再按一次；仍不行就把此分頁完全關掉再重開"
+        timedOut ? (waited >= 60
+            ? "等了 " + waited + " 秒都沒有回應——多半是等待期間頁面在背景（iOS 不讓背景頁面取得麥克風）。請在螢幕亮著時再按一次"
+            : "麥克風沒有回應（多半是前一個分頁還占著）。可直接再按一次；仍不行就把此分頁完全關掉再重開")
                  : (e && e.message) || "請確認已授權，且在 https/localhost 下開啟");
       startBtn.disabled = false; // 不必重載頁面就能重試
       starting = false;
@@ -1756,6 +1766,12 @@
       const t = stream && stream.getAudioTracks()[0];
       if (!t || t.readyState === "ended") recoverMic();
       kickLoop();
+    }
+    // 背景時被擋下來的自動接手（見手動播放結束那一段）。這裡不能寫在
+    // 上面的 running 分支裡——那個分支的前提正好相反：此刻沒有在監聽
+    if (pendingAutoStart && document.visibilityState === "visible") {
+      pendingAutoStart = false;
+      if (!running) { logEvent("回到前景，接續自動開始偵測"); start(); }
     }
   });
 
@@ -2352,7 +2368,21 @@
         logEvent("手動播放結束，依設定自動開始偵測"
           + (keepCk.checked && !keeperGestureOK ? "──⚠️ 保連音軌尚未解鎖，請碰一下畫面" : ""));
         setStatus("", "播放結束", "依設定自動開始偵測…");
-        setTimeout(() => { if (!running) start(); }, 1500); // 等元素釋放與音訊工作階段落定
+        // iOS 不讓背景頁面取得麥克風——getUserMedia 不會失敗，它會直接掛著；
+        // 而背景分頁的計時器又被凍結，所以連逾時都不會來。實測 08/28 18:36
+        // 音樂播完時螢幕是暗的，結果整整 12 分鐘沒有在監聽，直到 18:48 使用者
+        // 拿起手機，那個「10 秒逾時」才終於跑完。保連脈衝早就有這道守衛
+        //（紀錄裡的「保連脈衝暫停（頁面在背景…）」），只有這條自動接手的路徑漏了。
+        setTimeout(() => { // 等元素釋放與音訊工作階段落定
+          if (running) return;
+          if (document.visibilityState === "hidden") {
+            pendingAutoStart = true;
+            logEvent("⏸ 頁面在背景，暫不開啟麥克風（iOS 不讓背景頁面取得麥克風）——回到前景會自動開始偵測");
+            setStatus("", "播放結束", "頁面在背景，回到前景就會自動開始偵測");
+            return;
+          }
+          start();
+        }, 1500);
       } else {
         setStatus("", "播放結束", "尚未開始偵測——要讓它自動守著，請按「開啟麥克風並開始監聽」");
       }
@@ -2540,6 +2570,12 @@
   // 6 個＝約 1 分鐘——短暫的低頻干擾不必吵，持續一分鐘就真的該講了
   const DEAF_RUNS = 6;
   let deafRuns = 0;
+  // 診斷行的硬性上限。同一類洗版已經發生三次（v89、v93），前兩次都是靠
+  // 「把門檻訂好一點」收場，顯然不夠——門檻是判斷，判斷會錯；上限是結構，不會。
+  // 事件紀錄只留 800 筆，08/28 那一小時的 360 行把更早的歷史整個擠掉了。
+  // 到達上限時一定要留一行說明：靜默地丟掉紀錄的機制查不出失效，這是本專案的老教訓。
+  const DIAG_PER_HOUR = 10;
+  let diagHour = -1, diagCount = 0;
   let loopTicks = 0; // 迴圈生命跡象：由迴圈外的看門狗檢查（見 loopWatchdog）
   function loop() {
     if (!running) return;
@@ -2620,6 +2656,21 @@
     const fuss = trigMode.value === "fuss";
     // 哀叫通常比大哭小聲，哀叫模式音量門檻再放低 5dB
     const loud = db > Math.max(-68, noiseFloor + loudMarginDb() - (fuss ? 5 : 0));
+    // 「這段時間到底有沒有明顯的聲音」是一個客觀問題，答案不該隨靈敏度滑桿改變。
+    // loud 是「要不要觸發」的門檻（本來就該隨滑桿動），而診斷與「條件全滅」問的是前者——
+    // v93 把 loud 接上滑桿之後，這兩件事就一起被拉低了：使用者調到 90% 時
+    // loud 只剩「高出背景 1.7dB」，除濕機穩穩跨過，於是每 10 秒寫一行診斷，
+    // 08/28 15:01–16:02 實測 360 行，把 800 筆上限裡更早的歷史整個擠掉。
+    // 這個判準固定在「高出背景 12dB」，與滑桿完全脫鉤。
+    // 12 這個數字不是憑感覺挑的：背景基準每秒只往上爬 0.5dB，所以任何「剛剛才開始的
+    // 穩定噪音」都會有一段吸收期，在那段期間它看起來高出背景 20dB 以上。實測除濕機
+    // 一開，前 40 秒（4 個診斷視窗）都是 +21→+16→+11→+6dB。門檻訂 10 時，那段暫態
+    // 剛好塞滿「條件全滅」需要的 6 個連續視窗 → 每次開除濕機就誤報一次。
+    // 訂 12 之後暫態只撐得住 2～3 個視窗，離 6 還有一倍餘裕；而真正的失聰（08/16 那次
+    // 的持續低頻）是穩定高出背景 15dB，照樣叫得出來。
+    // 附帶的好處：12 很接近 v94 在預設 55% 時的 loud 邊際（12.65dB），
+    // 所以沒動過滑桿的人，這一版的診斷行幾乎與 v94 逐字相同。
+    const audible = db > noiseFloor + 12;
     const pe = estimatePitch();
     // 嬰兒哭聲：基頻 250–1000Hz 且振動有週期性；哀叫聲較輕短，哀叫模式全面放寬
     const rTh = fuss ? 0.3 : 0.35;
@@ -2729,10 +2780,11 @@
     // 脈衝改成 :54 診斷就跟著跑到 :10，整夜每 4 分鐘一行，佔掉紀錄的一半。
     if (!micLive || now < calUntil) stat = null;
     else {
-    if (!stat) stat = { t0: now, n: 0, loud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestDom: 0, bestR: 0, bestF0: 0, mlB: 0, mlA: 0 };
+    if (!stat) stat = { t0: now, n: 0, loud: 0, aud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestDom: 0, bestR: 0, bestF0: 0, mlB: 0, mlA: 0 };
     if (mlFresh) { if (mlScore > stat.mlB) stat.mlB = mlScore; if (mlAdult > stat.mlA) stat.mlA = mlAdult; }
     stat.n++;
     if (loud) stat.loud++;
+    if (audible) stat.aud++;
     if (babyPitch) stat.baby++;
     if (spectralCry) stat.spec++;
     if (adultVoice) stat.adult++;
@@ -2754,11 +2806,25 @@
       // spectralCry 只看頻譜比值（200–4000Hz 佔 0–8000Hz），安靜時 4kHz 以上本來就沒東西，
       // 比值自然偏高，於是「音量0% 基頻1% 頻譜10%」整晚不斷。
       // **訊號不存在時，分類器的通過率是雜訊，不是證據**——兩個分類分支都要有音量墊底。
-      const notable = frac("loud") >= 0.05
-                   || (frac("loud") >= 0.02 && (frac("baby") >= 0.20 || frac("spec") >= 0.20));
+      // v93 讓 loud 的邊際隨靈敏度移動（loudMarginDb() = 22 - sens*0.17，哀叫模式再 -5），
+      // 使用者調到 90% 之後門檻降到「高出背景 1.7dB」，除濕機穩穩地跨過那條線，
+      // frac("loud") 幾乎恆為 1——閘門等於恆真，08/28 15:01–16:02 實測寫了 360 行。
+      // 診斷用 audible（固定高出背景 10dB），不隨滑桿移動；loud 仍然照舊顯示在
+      // 診斷行上，因為「以現在的靈敏度來看有多少幀算大聲」對調滑桿仍有參考價值。
+      const notable = frac("aud") >= 0.05
+                   || (frac("aud") >= 0.02 && (frac("baby") >= 0.20 || frac("spec") >= 0.20));
+      const hr = Math.floor(Date.now() / 3600000);
+      if (hr !== diagHour) { diagHour = hr; diagCount = 0; }
       if (notable && !alerting) {
         const pc = k => Math.round(stat[k] / stat.n * 100) + "%";
-        logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + " 峰頻" + stat.bestDom.toFixed(0) + "Hz" + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : ""));
+        // 上限只管診斷行本身。下面的「條件全滅」是警訊、有自己的節流，
+        // 不能因為診斷太多就跟著閉嘴——會漏掉的正是最該講的那一次。
+        diagCount++;
+        if (diagCount === DIAG_PER_HOUR + 1) {
+          logEvent("🔧 診斷已達每小時上限（" + DIAG_PER_HOUR + " 行），暫停到下一個整點——這通常代表門檻訂得太鬆");
+        } else if (diagCount <= DIAG_PER_HOUR) {
+        logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 明顯" + pc("aud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + " 峰頻" + stat.bestDom.toFixed(0) + "Hz" + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : ""));
+        }
         // 「聽得到聲音，但基頻與頻譜一個都沒過」＝ dspCry 的 (babyPitch || spectralCry)
         // 恆為假，寶寶再怎麼哭都觸發不了。迴圈活著、麥克風活著、紀錄照寫，只有偵測是死的——
         // v82 的迴圈看門狗看不到這一層。實測 08/16 16:15 重建後整整 30 分鐘都是這個狀態，
@@ -2766,8 +2832,10 @@
         // 只有「很吵而且分類不出來」才算危險。實測除濕機這類穩定低頻會被背景基準
         // 慢慢吸收，之後每個視窗只有 1～10% 的幀超過音量門檻——那代表房間其實是安靜的，
         // 沒有東西被漏掉，這時示警只會每晚亂叫。真正該講的是「持續有大量聲音卻一個條件都過不了」
-        const loudFrac = stat.loud / stat.n;
-        deafRuns = (loudFrac >= 0.15 && stat.baby === 0 && stat.spec === 0) ? deafRuns + 1 : 0;
+        // 同樣改用 audible：這個警告問的是「房間裡真的很吵嗎」，
+        // 那是客觀事實，不該因為使用者把滑桿拉到 90% 就變成整晚成立
+        const audFrac = stat.aud / stat.n;
+        deafRuns = (audFrac >= 0.15 && stat.baby === 0 && stat.spec === 0) ? deafRuns + 1 : 0;
         if (deafRuns === DEAF_RUNS || (deafRuns > DEAF_RUNS && (deafRuns - DEAF_RUNS) % 30 === 0)) {
           logEvent("⚠️ 有聲音但偵測條件全滅約 " + Math.round(deafRuns * 10 / 60) + " 分鐘"
             + (stat.bestF0 ? "（基頻與頻譜連續 0%，F0 一直是 " + stat.bestF0.toFixed(0) + "Hz）"
