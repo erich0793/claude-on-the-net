@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v97</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v98</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1666,6 +1666,10 @@
       analyser.smoothingTimeConstant = 0.6;
       freqData = new Uint8Array(analyser.frequencyBinCount);
       timeData = new Float32Array(analyser.fftSize);
+      // 送出請求「之前」就先看頁面在不在背景。這一行是 v98 才有的，理由見 micBlockedByBg：
+      // 背景時 iOS 一定不給，而且逾時本身也被凍結，於是 resetting 會卡住十幾分鐘，
+      // 連看門狗都插不上手（實測 08/30 11:26→11:43 整整 16.5 分鐘）
+      if (micBlockedByBg("音訊重建")) { resetting = false; return; }
       stream = await micWithTimeout(); // 卡住的話 resetting 會永遠掛著，整晚失聰
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
@@ -1701,12 +1705,36 @@
   // 差別在於：這條路無法「先不要放掉麥克風」，因為播放期間本來就得放掉，
   // 播完一定得重拿。所以能做的是「別給錯建議、而且回到前景立刻重試」。
   let pendingMicRetry = false;
-  function micBgFail(e, what) {
-    if (!(e && e.message === "麥克風逾時") || document.visibilityState !== "hidden") return false;
+  // v98：與其等失敗，不如根本不要送出那個請求。
+  // v97 只處理「逾時之後」——但背景分頁的計時器是凍結的，逾時本身不會落地。
+  // 實測 08/30 11:26:55 播放結束在背景做深度重置，那個「10 秒逾時」直到
+  // 11:43:27 使用者拿起手機才寫出來：中間 16.5 分鐘 resetting 一直是 true，
+  // recoverMic 被自己的守衛擋在門外，看門狗完全插不上手，紀錄上一片空白，
+  // 最後使用者是自己重新整理頁面才恢復的（📄 頁面載入 11:43:48）。
+  // 失聰本身避不掉（iOS 就是不給背景頁面麥克風），但可以做到三件事：
+  //   ① 問題發生的當下就寫進紀錄，不是 16 分鐘後
+  //   ② 不讓 resetting／recovering 卡住，看門狗與時間表底色照常運作
+  //   ③ 回到前景立刻接回，使用者不需要重新整理
+  function micBlockedByBg(what) {
+    if (document.visibilityState !== "hidden") return false;
+    // 只在「這一段封鎖期」的第一次寫紀錄。看門狗每 3 秒就會呼叫一次 recoverMic，
+    // 不節流的話背景待 16 分鐘就是 300 多行——那正是 v93 洗版的同一種錯誤，
+    // 不可以在修洗版的同一個專案裡再製造一次。pendingMicRetry 就是「這一段」的旗標：
+    // 它在回到前景、真的接回麥克風時才會被清掉
+    const first = !pendingMicRetry;
     pendingMicRetry = true;
-    logEvent("⏸ " + what + "時拿不到麥克風：頁面在背景（iOS 不讓背景頁面取得麥克風）——回到前景會自動接回");
-    setStatus("alert", "頁面在背景，暫時聽不見", "iOS 不讓背景頁面取得麥克風。點亮螢幕回到這一頁就會自動接回");
+    if (first) {
+      logEvent("⏸ " + what + "：頁面在背景，iOS 不會把麥克風給背景頁面——"
+        + "這段時間聽不見，回到前景（點亮螢幕切回這一頁）就會自動接回");
+      setStatus("alert", "頁面在背景，暫時聽不見", "iOS 不讓背景頁面取得麥克風。點亮螢幕回到這一頁就會自動接回，不必重新整理");
+    }
     return true;
+  }
+  // v98 的前置檢查擋掉了絕大多數情況，這裡只剩「送出時還在前景、10 秒內切到背景」
+  // 這種罕見的交錯。共用同一個節流過的訊息，不要有兩套講法
+  function micBgFail(e, what) {
+    if (!(e && e.message === "麥克風逾時")) return false;
+    return micBlockedByBg(what);
   }
   // 回到前景時「試一次」不夠：剛才那個注定失敗的請求很可能還卡在 10 秒逾時裡，
   // recovering 仍為 true，於是這一次 recoverMic 會被自己的守衛擋掉、旗標卻已經消耗掉了
@@ -1734,6 +1762,7 @@
     recovering = true;
     if (!silent) setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
     try {
+      if (micBlockedByBg("麥克風重連")) { recovering = false; return; } // 見 micBlockedByBg
       if (!builtinMicId) await findBuiltinMic(); // 首次未鎖定成功時再試一次
       stream = await micWithTimeout(); // 卡住的話 recovering 會永遠掛著，看門狗再也不會重試
       if (!running) { stream.getTracks().forEach(t => t.stop()); recovering = false; return; } // 等待期間被停止
