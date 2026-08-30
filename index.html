@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v96</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v97</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1685,10 +1685,43 @@
         + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
       if (running && !alerting) setStatus("listening", "監聽中…", "已回到偵測狀態");
     } catch (e) {
+      if (micBgFail(e, "音訊重建")) { resetting = false; return; }
       logEvent("⚠️ 音訊重建失敗：" + (e.message || e));
       setStatus("alert", "麥克風恢復失敗", "請按「停止」後重新開始監聽");
     }
     resetting = false;
+  }
+
+  // 拿不到麥克風而且當下頁面在背景 ＝ 幾乎一定是那條 iOS 規則（不讓背景頁面取得麥克風），
+  // 不是故障。這一版之前兩條路徑都寫「請按停止後重新開始監聽」——那是錯的建議：
+  // 使用者什麼都不用做，回到前景就會自己接回來。實測 08/30 00:43 播放結束後做深度重置，
+  // 當時頁面在背景，重建失敗，接著連 recoverMic 也失敗，麥克風整整離線 262 秒（4.4 分鐘
+  // 完全聽不見），直到 00:45 使用者回到前景才 3 秒內接回。
+  // 這是同一條 iOS 規則第三次咬人（保連脈衝有守衛、v95 補了自動接手，這條漏了）——
+  // 差別在於：這條路無法「先不要放掉麥克風」，因為播放期間本來就得放掉，
+  // 播完一定得重拿。所以能做的是「別給錯建議、而且回到前景立刻重試」。
+  let pendingMicRetry = false;
+  function micBgFail(e, what) {
+    if (!(e && e.message === "麥克風逾時") || document.visibilityState !== "hidden") return false;
+    pendingMicRetry = true;
+    logEvent("⏸ " + what + "時拿不到麥克風：頁面在背景（iOS 不讓背景頁面取得麥克風）——回到前景會自動接回");
+    setStatus("alert", "頁面在背景，暫時聽不見", "iOS 不讓背景頁面取得麥克風。點亮螢幕回到這一頁就會自動接回");
+    return true;
+  }
+  // 回到前景時「試一次」不夠：剛才那個注定失敗的請求很可能還卡在 10 秒逾時裡，
+  // recovering 仍為 true，於是這一次 recoverMic 會被自己的守衛擋掉、旗標卻已經消耗掉了
+  //（探針一開始就是這樣紅的——真機那次剛好 3 秒就接回，掩蓋了這個空窗）。
+  // 連試幾次涵蓋那個還沒落地的請求；接回來或離開前景就自己停，不會變成常駐計時器。
+  function micRetryBurst() {
+    let n = 0;
+    const go = () => {
+      if (!running || document.visibilityState !== "visible") return;
+      const t = stream && stream.getAudioTracks()[0];
+      if (t && t.readyState === "live") return; // 已經接回來了
+      recoverMic();
+      if (++n < 6) setTimeout(go, 2500);        // 6 次 × 2.5 秒 ＝ 涵蓋 10 秒的逾時還有餘裕
+    };
+    go();
   }
 
   let recovering = false;
@@ -1735,8 +1768,10 @@
         logEvent("麥克風中斷後已自動重連");
       }
     } catch (e) {
-      setStatus("alert", "麥克風被關閉且無法自動恢復", "請按「停止」後重新開始監聽");
-      logEvent("⚠️ 麥克風中斷且無法自動恢復");
+      if (!micBgFail(e, "麥克風重連")) {
+        setStatus("alert", "麥克風被關閉且無法自動恢復", "請按「停止」後重新開始監聽");
+        logEvent("⚠️ 麥克風中斷且無法自動恢復");
+      }
     }
     recovering = false;
   }
@@ -1766,7 +1801,10 @@
       requestWake();
       if (audioCtx && audioCtx.state !== "running" && !alerting) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
-      if (!t || t.readyState === "ended") recoverMic();
+      // 背景期間被 iOS 擋掉的那次重連：一回到前景就立刻再試，不必等看門狗的下一輪。
+      // 實測 08/30 00:45 使用者一回到前景，3 秒內就接回來了
+      if (pendingMicRetry) { pendingMicRetry = false; micRetryBurst(); }
+      else if (!t || t.readyState === "ended") recoverMic();
       kickLoop();
     }
     // 背景時被擋下來的自動接手（見手動播放結束那一段）。這裡不能寫在
