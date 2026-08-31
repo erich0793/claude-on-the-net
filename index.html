@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v99</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v100</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1330,6 +1330,14 @@
     el.addEventListener("pause", refreshTestBtn);
     el.addEventListener("ended", () => { if (alerting && curEl() === el) stopAlert(); });
     el.addEventListener("pause", () => alertPaused(el));
+    // 媒體元素出錯以前完全沒人聽——08/31 19:27 那次整整 3 分鐘無聲，紀錄上連一個字都沒有。
+    // 只在「這顆正在當警報」時記，否則池元素用完後的 load() 也會叫，變成雜訊
+    el.addEventListener("error", () => {
+      if (!alerting || curEl() !== el) return;
+      const e = el.error;
+      logEvent("⚠️ 音訊元素錯誤（" + elTag(el) + "｜code " + ((e && e.code) || "?")
+        + (e && e.message ? "：" + e.message : "") + "）——這一次可能沒有聲音");
+    });
   }
   // 警報播到一半被 pause：可能是使用者按的，也可能是 iOS 因為輸出路由改變（藍牙斷線）
   // 自己把媒體停掉的。兩者的處置一樣（停警報＋30 秒冷靜期），但**紀錄必須分得出來**——
@@ -2529,6 +2537,20 @@
       }
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
+      // 「元素在前進」抓不到的另一種無聲：**播的是對的檔案嗎？音量對嗎？**
+      // 解鎖用的無聲小檔與保連的 17.5kHz 訊號都會讓 currentTime 正常前進，
+      // 但人耳完全聽不到——那種情況下所有健康檢查都會顯示一切正常。
+      // 08/31 19:27 那次無聲，既有的看門狗（paused 或 currentTime<0.3）沒有叫，
+      // 代表元素確實在前進：換句話說，病因只可能在「播錯東西」或「被消音」這一類，
+      // 而當時的紀錄完全沒有這些欄位可查。這一行只在不對勁時才寫，正常時零成本。
+      if (el !== player && (el.muted || el.volume < 1 || el.src !== player.src)) {
+        logEvent("⚠️ 播放前檢查異常（" + elTag(el)
+          + (el.src !== player.src ? "｜播的不是選定的音檔" : "")
+          + (el.muted ? "｜元素是靜音狀態" : "")
+          + (el.volume < 1 ? "｜音量只有 " + Math.round(el.volume * 100) + "%" : "")
+          + "）——已就地修正，若仍無聲請回報這一行");
+        try { el.muted = false; el.volume = 1; if (el.src !== player.src) { el.src = player.src; el._real = true; } } catch (e) {}
+      }
       if (el !== player) attachAlertHandlers(el); // 徵用時才掛事件（#player 已有）
       const dryBefore = drySpell(); // 先讀：等一下播放成功會把時戳歸零
       // 觸發那一行以前沒有任何聲學數據，事後只能寄望附近剛好有一行「診斷：」——
@@ -2586,13 +2608,52 @@
           if (el2 && el2._origin === "熱身") el2._lastAlert = Date.now();
           return el2;
         };
+        // play() 的 promise 只代表「開始播放」，**不代表真的有聲音出來**。
+        // 08/31 19:27 實測：紀錄寫了「🔊 觸發播放」、整整播滿 3 分鐘、沒有任何錯誤行，
+        // 但喇叭與手機都完全沒有聲音。警報元素從來沒有 error 處理器，也沒有任何人
+        // 確認過「它真的在前進」——這是本產品最重要的一個動作，卻是唯一沒有驗證的動作。
+        // 唯一可靠的證據是 currentTime 有沒有往前跑：真的在出聲，它就會動。
+        const verifyAudio = (el2, second) => setTimeout(() => {
+          if (!alerting || curEl() !== el2) return; // 已經停了／已經換人
+          const now2 = el2.currentTime, t0 = el2._t0 || 0;
+          // paused 不能當成「不用管」而放過去：使用者自己按暫停的話 alertPaused 早就
+          // 把 alerting 收掉、上面那行就 return 了。走到這裡還是 paused，
+          // 代表它「沒在播、也沒人發現」——那正是這次要抓的狀態。
+          // currentTime 變小 ＝ 循環繞回開頭，那也是在前進
+          const moving = !el2.paused && (now2 - t0 > 0.3 || now2 < t0);
+          if (moving) return;
+          // 先給第二次機會：10MB 音檔配 preload="none"，緩衝有可能比較慢，
+          // 誤判會讓正在出聲的元素被換掉，代價不是零
+          if (!second) { el2._t0 = now2; verifyAudio(el2, true); return; } // 兩段共 3 秒，趕在下面 6 秒的重載看門狗之前
+          logEvent("⚠️ 播放沒有真的在前進（" + elTag(el2)
+            + "｜currentTime 停在 " + now2.toFixed(2) + " 秒"
+            + (el2.paused ? "｜元素處於暫停狀態" : "")
+            + "｜readyState " + el2.readyState + " networkState " + el2.networkState
+            + (el2.error ? " error" + el2.error.code : "")
+            + "｜音量 " + Math.round(el2.volume * 100) + "%" + (el2.muted ? " 靜音中" : "")
+            + "｜長度 " + (isFinite(el2.duration) ? el2.duration.toFixed(0) + " 秒" : "未知")
+            + "）——這一次很可能完全沒有聲音");
+          attempt++;
+          const nxt = attempt < 3 ? nextEl() : null;
+          if (nxt) {
+            logEvent("↻ 改用下一顆元素重試（" + elTag(nxt) + "）");
+            const c = claim(nxt);          // 先換人：舊元素的 pause 事件才不會被當成「使用者停止播放」
+            try { el2.pause(); } catch (e) {}
+            tryPlay(c);
+            return;
+          }
+          giveUp();
+        }, 1500);
         const tryPlay = el2 => {
+          try { el2._t0 = el2.currentTime; } catch (e) { el2._t0 = 0; }
           const pr = el2.play();
-          if (!pr) { playStarted = true; return; }
+          if (!pr) { playStarted = true; verifyAudio(el2); return; }
           pr.then(() => {
             playStarted = true; blockedRun = 0;
-            lastRealAudioAt = Date.now(); // 真的有音樂送到喇叭了
+            // 注意：這只代表「播放已開始」，不代表喇叭真的有聲音——那要等 verifyAudio 確認
+            lastRealAudioAt = Date.now();
             if (cryRec && cryRec.ok === null) { cryRec.ok = true; crySave(); }
+            verifyAudio(el2);
           }).catch(err => {
             logEvent("⚠️ 播放被瀏覽器阻擋（" + ((err && err.name) || "未知") + "｜" + elTag(el2)
               + " " + (document.visibilityState === "visible" ? "前景" : "背景")
@@ -2635,13 +2696,16 @@
         tryPlay(el);
         // 播放健康檢查：媒體管線偶爾卡死（進度不動、聲音碎片循環、無法暫停），
         // 唯一可靠的解法是重載頁面
+        // 這道看門狗比 verifyAudio 更激烈（直接重載頁面，會丟掉手勢授權），
+        // 所以要排在它後面：先讓「換一顆元素」試過，真的還是不動才動用重載。
+        // v100 之前是 4000ms，與新的檢查同時開火，兩個機制會互相打架
         setTimeout(() => {
           const el = curEl();
           if (alerting && playStarted && (el.paused || el.currentTime < 0.3)) {
             logEvent("⚠️ 播放管線卡死，重載頁面恢復");
             scheduleRouteReset();
           }
-        }, 4000);
+        }, 6000);
       }, wantFade ? 1500 : 800); // 淡出路徑多等一點，讓錄音工作階段拆乾淨再建引擎
     } else { setStatus("alert", "偵測到哭聲！", ""); logEvent("🔊 觸發（無音檔，提示音）"); beep(); alerting = false; } // 沒有音檔時退而發出提示音
   }
