@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v100</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v101</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1774,7 +1774,12 @@
       if (!builtinMicId) await findBuiltinMic(); // 首次未鎖定成功時再試一次
       stream = await micWithTimeout(); // 卡住的話 recovering 會永遠掛著，看門狗再也不會重試
       if (!running) { stream.getTracks().forEach(t => t.stop()); recovering = false; return; } // 等待期間被停止
-      if (audioCtx.state !== "running") await audioCtx.resume(); // 喚醒播放期間休眠的引擎
+      // resume() 要有時限：本專案鐵律「任何 await 都要有時限」，而這一個一直漏掉。
+      // 它若不落地，recovering 就永遠是 true——連帶把保連脈衝也一起鎖死（它的攔路旗標之一）。
+      if (audioCtx.state !== "running") {
+        await Promise.race([audioCtx.resume(),
+          new Promise(r => setTimeout(r, 3000))]).catch(() => {});
+      }
       if (source) source.disconnect();
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
@@ -1863,6 +1868,19 @@
   let lastTicks = -1, stallSince = 0, lastStallLog = 0;
   setInterval(() => {
     if (running) watchBeat(); // 搭便車寫底色紀錄的心跳：不另開一個計時器
+    // 保連脈衝的生命跡象。它自己被擋掉時是完全靜默的，只能由外面的人來問
+    //（監控者與被監控者同生共死等於沒有監控——這是迴圈看門狗的同一條教訓）。
+    // 只在「應該要能跑」的時候才問：有在監聽、保連開著、沒在播、頁面在前景。
+    if (running && keepTimer && !alerting && document.visibilityState === "visible") {
+      if (!lastPulseRun) lastPulseRun = Date.now(); // 剛開始監聽，給它第一個週期
+      else if (Date.now() - lastPulseRun > pulseEvery * 2.5 && !pulseStuckLogged) {
+        pulseStuckLogged = true;
+        const who = pulseBlockers();
+        logEvent("⚠️ 保連脈衝已 " + Math.round((Date.now() - lastPulseRun) / 60000)
+          + " 分鐘沒有送出（" + (who ? "被「" + who + "」擋住" : "原因不明，旗標都是乾淨的")
+          + "）——音響可能因為長時間沒收到聲音而睡著，警報會改從手機播出");
+      }
+    }
     if (!running) { lastTicks = -1; stallSince = 0; lastStallLog = 0; return; }
     const now = Date.now();
     if (lastTicks >= 0 && loopTicks - lastTicks < ALIVE_MIN) {
@@ -2046,12 +2064,21 @@
   function refreshKeeper(why) {
     if (!keeper || pulsing || keeperFreshing || !keeper.paused) return;
     keeperFreshing = true;
+    // 這是個 200ms 的動作，卻是 keepPulse 的五個攔路旗標之一。play() 若永遠不落地
+    //（本專案已知：媒體 promise 會不 resolve 也不 reject），這個旗標就永遠掛著，
+    // 保連脈衝從此靜默停擺。給它一個絕對的保險絲——寧可重複 restore 也不要卡死。
+    const fuse = setTimeout(() => {
+      if (!keeperFreshing) return;
+      keeperFreshing = false;
+      logEvent("🔧 保連音軌刷新沒有回應，已強制解除鎖定（避免保連脈衝被卡住）");
+    }, 5000);
     const back = keeper.src, loop = keeper.loop;
     keeper.muted = true; keeper.loop = false;
     keeper.src = silentUrl();
     const restore = () => {
       try { keeper.pause(); } catch (e) {}
       keeper.src = back; keeper.loop = loop; keeper.muted = false; keeperFreshing = false;
+      clearTimeout(fuse);
     };
     const p = keeper.play();
     if (p) p.then(() => {
@@ -2173,6 +2200,17 @@
     return ring[pulseIdx];
   }
   let pulseSkipped = false;
+  // 保連脈衝「沉默地停掉」是本專案最貴的失效之一（08/08 那晚自我停用 8 分鐘後
+  // 整晚只剩嗶聲）。這次是另一種形式：函式還在被呼叫，但每次都被下面那排旗標擋掉，
+  // 而擋掉是**完全靜默**的——08/31 20:19–21:51 整整 92 分鐘一次都沒送出，
+  // 紀錄上沒有任何一行提到它（#1～#3 本來一定會記，失敗也一定會記，兩者都是 0），
+  // 於是音響 50 分鐘沒收到任何聲音而睡著，警報就從手機出來了。
+  // → 記下「最後一次真的送出脈衝」的時間，由外面的看門狗檢查，並且**指名是哪個旗標**。
+  let lastPulseRun = 0, pulseStuckLogged = false;
+  function pulseBlockers() {
+    return [alerting && "播放中", recovering && "麥克風重連中", pulsing && "脈衝進行中",
+            resetting && "音訊重置中", keeperFreshing && "保連音軌刷新中"].filter(Boolean).join("＋");
+  }
   function keepPulse() {
     if (!running || alerting || recovering || pulsing || resetting || keeperFreshing) return;
     // 背景時絕不放掉麥克風：iOS 不讓背景頁面重新取得麥克風，脈衝一釋放就要
@@ -2184,6 +2222,7 @@
       return;
     }
     if (pulseSkipped) { logEvent("已回到前景，保連脈衝恢復"); pulseSkipped = false; }
+    lastPulseRun = Date.now(); pulseStuckLogged = false; // 生命跡象：走到這裡才算真的有在跑
     pulsing = true;
     const rider = warmRider(); // 與保連音軌同時播放，順便刷新它的播放授權
     // 釋放麥克風 → 等路由切到音響 → 播 5 秒保連訊號 → 收回麥克風
