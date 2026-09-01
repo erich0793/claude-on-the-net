@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v101</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v102</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1873,12 +1873,18 @@
     // 只在「應該要能跑」的時候才問：有在監聽、保連開著、沒在播、頁面在前景。
     if (running && keepTimer && !alerting && document.visibilityState === "visible") {
       if (!lastPulseRun) lastPulseRun = Date.now(); // 剛開始監聽，給它第一個週期
-      else if (Date.now() - lastPulseRun > pulseEvery * 2.5 && !pulseStuckLogged) {
+      // 真正該擔心的是「音響有多久沒收到任何聲音」，不是「脈衝隔多久沒送」。
+      // 警報播放（含 30 分鐘的哄睡音樂）期間音響一直在收音樂，不會睡著——
+      // v101 只看脈衝間隔，於是 09/01 20:03 對著一段剛播完 30 分鐘音樂的情況
+      // 喊「音響可能睡著了」，那是假警報。
+      const quiet = Date.now() - Math.max(lastPulseRun, lastRealAudioAt || 0);
+      if (quiet > pulseEvery * 2.5 && !pulseStuckLogged) {
         pulseStuckLogged = true;
-        const who = pulseBlockers();
-        logEvent("⚠️ 保連脈衝已 " + Math.round((Date.now() - lastPulseRun) / 60000)
-          + " 分鐘沒有送出（" + (who ? "被「" + who + "」擋住" : "原因不明，旗標都是乾淨的")
-          + "）——音響可能因為長時間沒收到聲音而睡著，警報會改從手機播出");
+        // 用「被擋當下」記下來的原因，不是現在才問（現在問到的是 30 秒後的狀態）
+        const fresh = lastBlockedBy && Date.now() - lastBlockedAt < pulseEvery * 1.5;
+        logEvent("⚠️ 音響已 " + Math.round(quiet / 60000) + " 分鐘沒有收到任何聲音（保連脈衝"
+          + (fresh ? "最近一次被「" + lastBlockedBy + "」擋住" : "沒有被任何旗標擋住，是它自己沒跑")
+          + "）——音響可能因此睡著或斷線，警報會改從手機播出");
       }
     }
     if (!running) { lastTicks = -1; stallSince = 0; lastStallLog = 0; return; }
@@ -2206,13 +2212,27 @@
   // 紀錄上沒有任何一行提到它（#1～#3 本來一定會記，失敗也一定會記，兩者都是 0），
   // 於是音響 50 分鐘沒收到任何聲音而睡著，警報就從手機出來了。
   // → 記下「最後一次真的送出脈衝」的時間，由外面的看門狗檢查，並且**指名是哪個旗標**。
-  let lastPulseRun = 0, pulseStuckLogged = false;
+  let lastPulseRun = 0, pulseStuckLogged = false, lastBlockedBy = "", lastBlockedAt = 0;
   function pulseBlockers() {
     return [alerting && "播放中", recovering && "麥克風重連中", pulsing && "脈衝進行中",
             resetting && "音訊重置中", keeperFreshing && "保連音軌刷新中"].filter(Boolean).join("＋");
   }
   function keepPulse() {
-    if (!running || alerting || recovering || pulsing || resetting || keeperFreshing) return;
+    if (!running) return;
+    // 保連音軌的「刷新授權」只是個 200ms 的診斷用小動作，而保連脈衝才是真正把 5 秒訊號
+    // 送到音響、讓它不要睡著的那一個。兩者掛在**同一個 4 分鐘週期**上（freshTimer 與
+    // keepTimer 都用 PULSE_MS），只要相位一重疊，就會每一次都被它擋掉——
+    // 09/01 實測：保鮮脈衝每 4 分鐘準時運作，保連脈衝在 2 小時 40 分鐘裡只送出 1 次，
+    // 而 30 秒看門狗每次去看旗標都是乾淨的（碰撞只有 200ms，早就過去了）。
+    // 這種情況直接接管：脈衝自己就會播保連音軌，刷新效果比那個小動作更好。
+    if (keeperFreshing && !alerting && !recovering && !pulsing && !resetting) keeperFreshing = false;
+    if (alerting || recovering || pulsing || resetting || keeperFreshing) {
+      // 「被誰擋住」一定要在**被擋的當下**記下來。v101 是在看門狗裡才問，
+      // 而兩者的節奏不同步，量到的是 30 秒後的狀態——四次警告全部寫「原因不明」，
+      // 等於白記。這是「量測時機」與「事件時機」錯開的典型錯誤。
+      lastBlockedBy = pulseBlockers(); lastBlockedAt = Date.now();
+      return;
+    }
     // 背景時絕不放掉麥克風：iOS 不讓背景頁面重新取得麥克風，脈衝一釋放就要
     // 等到你回到前景才拿得回來（實測空窗 15～42 秒，甚至逾時失敗）。
     // 音響閒置斷線是可以忍的，整段聽不見寶寶不行。
@@ -2383,7 +2403,13 @@
     else restore();
   }
   function freshOn() {
-    if (!freshTimer) freshTimer = setInterval(freshPulse, PULSE_MS);
+    // 刻意錯開半個週期再起跑：兩個同週期的計時器如果同時建立，就會永遠同相，
+    // 而保鮮脈衝設的 keeperFreshing 剛好是保連脈衝的攔路旗標之一（見 keepPulse）。
+    // 09/01 實測兩者的 #1 落在同一秒，之後保連脈衝就再也沒跑過。
+    // keepPulse 那邊已經改成直接接管，這裡再加一道相位隔離——兩道都便宜，而且互相獨立
+    if (!freshTimer) setTimeout(() => {
+      if (!freshTimer) freshTimer = setInterval(freshPulse, PULSE_MS);
+    }, Math.round(PULSE_MS / 2));
     // 主動重建音源：不等 blob 網址被 iOS 作廢才補救（實測約 10 小時後失效）
     if (!srcTimer) srcTimer = setInterval(() => {
       if (!running || alerting || resetting || !player.src) return;
