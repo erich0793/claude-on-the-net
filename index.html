@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v102</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v103</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1871,6 +1871,22 @@
     // 保連脈衝的生命跡象。它自己被擋掉時是完全靜默的，只能由外面的人來問
     //（監控者與被監控者同生共死等於沒有監控——這是迴圈看門狗的同一條教訓）。
     // 只在「應該要能跑」的時候才問：有在監聽、保連開著、沒在播、頁面在前景。
+    // 保連的健康狀態必須留得下來。紀錄滿 800 筆時，「保連脈衝 #N 已送出」是第一批被丟掉的
+    //（ROUTINE_RE），「保持連線：每 4 分鐘…」與「警報結束」等也在第二批——
+    // 09/04 那份橫跨 2.5 天的紀錄裡兩者一行都不剩，於是「保連到底有沒有在跑」
+    // 完全無法從紀錄回答，而前兩次的故障（v101、v102）剛好都出在這裡。
+    // 定期留一行帶 🔧 的摘要：IMPORTANT_RE 會保住它，成本是每天 4 行。
+    // 這是「沉默的機制查不出失效」的延伸——**連『它是好的』也必須留得下證據**。
+    if (running) {
+      if (!lastPulseReport) { lastPulseReport = Date.now(); pulsesAtReport = pulseN; }
+      else if (Date.now() - lastPulseReport > 21600000) { // 6 小時
+        const n = pulseN - pulsesAtReport;
+        lastPulseReport = Date.now(); pulsesAtReport = pulseN;
+        logEvent("🔧 保連狀態：" + (!keepTimer
+          ? "**未開啟**——「保持連線」沒有勾選，藍牙音響閒置久了可能自動斷線或關機"
+          : "過去 6 小時送出 " + n + " 次脈衝" + (n === 0 ? "——一次都沒送出，音響可能會睡著" : "（正常）")));
+      }
+    }
     if (running && keepTimer && !alerting && document.visibilityState === "visible") {
       if (!lastPulseRun) lastPulseRun = Date.now(); // 剛開始監聽，給它第一個週期
       // 真正該擔心的是「音響有多久沒收到任何聲音」，不是「脈衝隔多久沒送」。
@@ -1887,7 +1903,7 @@
           + "）——音響可能因此睡著或斷線，警報會改從手機播出");
       }
     }
-    if (!running) { lastTicks = -1; stallSince = 0; lastStallLog = 0; return; }
+    if (!running) { lastTicks = -1; stallSince = 0; lastStallLog = 0; lastPulseReport = 0; return; }
     const now = Date.now();
     if (lastTicks >= 0 && loopTicks - lastTicks < ALIVE_MIN) {
       // 發現的當下，迴圈其實已經死了整整一個檢查週期——起算點要往回推，否則第一行寫「停擺 0 秒」
@@ -2213,6 +2229,7 @@
   // 於是音響 50 分鐘沒收到任何聲音而睡著，警報就從手機出來了。
   // → 記下「最後一次真的送出脈衝」的時間，由外面的看門狗檢查，並且**指名是哪個旗標**。
   let lastPulseRun = 0, pulseStuckLogged = false, lastBlockedBy = "", lastBlockedAt = 0;
+  let lastPulseReport = 0, pulsesAtReport = 0; // 保連健康摘要（見迴圈外的看門狗）
   function pulseBlockers() {
     return [alerting && "播放中", recovering && "麥克風重連中", pulsing && "脈衝進行中",
             resetting && "音訊重置中", keeperFreshing && "保連音軌刷新中"].filter(Boolean).join("＋");
