@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v103</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v104</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2715,6 +2715,25 @@
             + "｜音量 " + Math.round(el2.volume * 100) + "%" + (el2.muted ? " 靜音中" : "")
             + "｜長度 " + (isFinite(el2.duration) ? el2.duration.toFixed(0) + " 秒" : "未知")
             + "）——這一次很可能完全沒有聲音");
+          // el.error 有值 ＝ 來源本身壞了（code2 網路／code3 解碼／code4 格式不支援），
+          // **換元素完全沒有用**——所有元素都指向同一個 blob 網址。
+          // 這正是 NotSupportedError 那條路早就學到的事，只是當時只接在「play() 被 reject」上；
+          // play() 成功、元素卻靜靜地不動的這條路沒接到。
+          // 09/05 20:07 實測 error3（解碼失敗）：換了 #18→#19→#20 全部一樣，
+          // 接著 6 秒的看門狗判定「管線卡死」而重載頁面——重載雖然會重建 blob，
+          // 但它同時沒收了手勢授權（鐵律），於是之後 34 分鐘、連續 10 次觸發全部只剩嗶聲。
+          // refreshAudioSrc() 從 IndexedDB 重建 blob，效果一樣但**不必重載**。
+          if (el2.error && el2.error.code >= 2 && !srcFixed && attempt < 4) {
+            srcFixed = true;
+            logEvent("↻ 來源本身壞了（error" + el2.error.code + "），換元素沒有用——改重建音源（不重載頁面，才不會丟掉播放授權）");
+            refreshAudioSrc().then(ok => {
+              if (!ok) { giveUp(); return; }
+              el2._real = true; el2.src = player.src;
+              try { el2.currentTime = 0; } catch (e) {}
+              tryPlay(el2);
+            });
+            return;
+          }
           attempt++;
           const nxt = attempt < 3 ? nextEl() : null;
           if (nxt) {
@@ -2783,10 +2802,15 @@
         // v100 之前是 4000ms，與新的檢查同時開火，兩個機制會互相打架
         setTimeout(() => {
           const el = curEl();
-          if (alerting && playStarted && (el.paused || el.currentTime < 0.3)) {
-            logEvent("⚠️ 播放管線卡死，重載頁面恢復");
-            scheduleRouteReset();
-          }
+          if (!alerting || !playStarted) return;
+          if (!(el.paused || el.currentTime < 0.3)) return;
+          // 重載是最後手段：它會沒收手勢授權，代價是接下來每一次觸發都只剩嗶聲，
+          // 直到使用者親手碰畫面為止（09/05 實測 34 分鐘、連續 10 次）。
+          // 已經在重建音源時就別重載——那條路修的是同一件事（來源壞掉），
+          // 而且不必付這個代價。等它跑完；真的還是不動，下一次觸發的看門狗會再來一次。
+          if (srcFixed) { logEvent("🔧 播放管線仍未前進，但音源正在重建中——先不重載頁面（重載會丟掉播放授權）"); return; }
+          logEvent("⚠️ 播放管線卡死，重載頁面恢復");
+          scheduleRouteReset();
         }, 6000);
       }, wantFade ? 1500 : 800); // 淡出路徑多等一點，讓錄音工作階段拆乾淨再建引擎
     } else { setStatus("alert", "偵測到哭聲！", ""); logEvent("🔊 觸發（無音檔，提示音）"); beep(); alerting = false; } // 沒有音檔時退而發出提示音
