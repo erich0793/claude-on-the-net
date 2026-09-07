@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v105</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v106</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -193,6 +193,7 @@
       <span class="dot" id="dot"></span>
       <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
     </div>
+    <div id="poolWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--warn); background:var(--panel-2); line-height:1.5"></div>
     <div class="row">
       <button class="primary" id="startBtn" style="font-size:16px; padding:14px 20px">🎙️ 開啟麥克風並開始監聽</button>
       <button class="danger" id="stopBtn" disabled>停止</button>
@@ -1416,7 +1417,30 @@
         logEvent("⚠️ " + hint);
         if (running && !alerting) setStatus("listening", "監聽中…", hint);
       }
+      paintPool(); // 要等解鎖真的落地才重畫：剛推進池裡的元素 _unlockOK 還是 undefined，
+                   // 這時候畫出來會是「已用完」，等於在使用者剛補滿的瞬間閃一下紅字
     }, 4000); // 32 顆的解鎖要幾秒才全部落地，太早統計會誤報成失敗
+  }
+
+  // 元素池見底這件事，過去只寫在事件紀錄裡。09/07 12:25 實測：12:12:36 就寫了
+  //「只剩 3 顆」，13 分鐘後池歸零、處女元素被擋、只好改用熱身元素——音樂就從手機出來了。
+  // 那一行沒有人看到，因為要切到「紀錄」分頁才看得到。
+  // 補池唯一的方法是使用者的手勢（無手勢建出來的元素永遠不能播，實測 24/24），
+  // 也就是說**這是唯一一種「只有使用者能修、程式完全無能為力」的故障**——
+  // 那它就必須出現在使用者真的會看的那一面，而不是只留在紀錄裡。
+  // 碰畫面任何位置都會補（見 pointerdown），所以這塊警示本身被點到就等於修好了。
+  function paintPool() {
+    const el = $("poolWarn");
+    if (!el) return;
+    const ok = elPool.filter(e => e._unlockOK && !e._inUse).length;
+    if (!running || !player.src || ok > 3) { el.hidden = true; return; }
+    el.hidden = false;
+    el.style.borderColor = ok ? "var(--warn)" : "var(--danger)";
+    el.innerHTML = ok
+      ? "⚠️ <b>全新播放元素只剩 " + ok + " 顆</b>——<b>碰一下畫面任何位置</b>就會補滿。"
+        + "<span class='hint' style='display:block'>用完之後警報改由熱身元素播出：仍然會出聲，但每次重新爭取藍牙音響的效果會變差，可能改從手機出來。</span>"
+      : "⚠️ <b>全新播放元素已用完</b>——<b>碰一下畫面任何位置</b>即可補滿。"
+        + "<span class='hint' style='display:block'>現在觸發警報很可能<b>從手機而不是音響</b>出來（補池需要你的觸碰，程式自己補不了）。</span>";
   }
 
   // —— 每輪播放專屬的淡出引擎：全新 AudioContext 捕捉全新池元素（皆無歷史、
@@ -1868,6 +1892,7 @@
   let lastTicks = -1, stallSince = 0, lastStallLog = 0;
   setInterval(() => {
     if (running) watchBeat(); // 搭便車寫底色紀錄的心跳：不另開一個計時器
+    paintPool();              // 兜底：任何漏掉的消耗路徑最遲 30 秒後也會反映在畫面上
     // 保連脈衝的生命跡象。它自己被擋掉時是完全靜默的，只能由外面的人來問
     //（監控者與被監控者同生共死等於沒有監控——這是迴圈看門狗的同一條教訓）。
     // 只在「應該要能跑」的時候才問：有在監聽、保連開著、沒在播、頁面在前景。
@@ -1927,6 +1952,7 @@
   function stop() {
     const hungEl = curEl();   // 需在 stopAlert 清空 alertEl 前捕捉，卡死保險才盯得到正確元素
     running = false;          // 先標記停止，避免 stopAlert 觸發的麥克風重連又把麥克風打開
+    paintPool();              // 沒在監聽就不該掛著「池要見底了」的警示
     if (alerting) stopAlert(); // 停止監聽時也停掉正在播放的警報音
     if (rafId) cancelAnimationFrame(rafId);
     if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
@@ -2512,6 +2538,7 @@
     fadeCtx = null; fadeGain = null; // 立刻讓位給下一輪播放
     alerting = false; cryMs = 0;
     alertEl = null; // 池元素用完即棄，不回收
+    setTimeout(paintPool, 0); // 熱身元素放手後可用顆數會變，等這一輪收尾完再畫
     el.loop = false;
     if (!el.paused && fg && fc) {
       // 結尾爆音修正：先 80ms 快速淡出到近零、等音訊管線排空才暫停
@@ -2628,6 +2655,7 @@
         logEvent("🔧 元素池已用盡，之後改用熱身元素（沒有手勢就無法補鑄，「每次都用全新元素」的路由重新仲裁失效）");
       }
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
+      paintPool();      // 池是在這裡被消耗的，畫面要當場跟上
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       // 「元素在前進」抓不到的另一種無聲：**播的是對的檔案嗎？音量對嗎？**
       // 解鎖用的無聲小檔與保連的 17.5kHz 訊號都會讓 currentTime 正常前進，
@@ -2698,6 +2726,16 @@
           const el2 = elPool.shift() || pickWarm(true) || pickWarm(false)
             || (curEl() !== player ? player : null);
           if (el2 && el2._origin === "熱身") el2._lastAlert = Date.now();
+          // 這條重試路徑也會走到熱身元素，而且 09/07 12:25 那次就是這樣走的：
+          // 一開始挑的是處女元素#16（所以起頭那行「元素池已用盡」的判斷不成立），
+          // 被擋之後才換到熱身#1。使用者聽到的是「音樂從手機出來」，紀錄卻只寫
+          // 「改用下一顆元素重試」——沒有任何一行說得出路由為什麼變了。
+          // 只要**真的接手播放的**是熱身元素，就要在當下講清楚。
+          if (el2 && el2._origin === "熱身") {
+            logEvent("🔧 這一次改由熱身元素播放（處女元素池已空）——仍會出聲，但沒有重新爭取藍牙音響，"
+              + "可能會從手機出來。碰一下畫面任何位置可補滿元素池。");
+          }
+          paintPool();
           return el2;
         };
         // play() 的 promise 只代表「開始播放」，**不代表真的有聲音出來**。
