@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v106</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v107</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1429,18 +1429,34 @@
   // 也就是說**這是唯一一種「只有使用者能修、程式完全無能為力」的故障**——
   // 那它就必須出現在使用者真的會看的那一面，而不是只留在紀錄裡。
   // 碰畫面任何位置都會補（見 pointerdown），所以這塊警示本身被點到就等於修好了。
+  // v106 的說法是錯的：它寫「現在觸發警報**很可能**從手機而不是音響出來」，
+  // 但實際上池空之後熱身元素**多半仍然從音響出來**——熱身元素每隔幾分鐘就跟著
+  // 保連脈衝播一次，而脈衝是在麥克風釋放的空窗裡送的，所以它們身上的路由通常
+  // 就是音響。實測分佈：08/29 池空後連播十幾次「有幾次」從手機出來；
+  // 09/06 池空三次沒有任何一次；09/07 12:25 那次從手機出來。
+  // 使用者當場就反駁了：「螢幕顯示已用完，但下一次還是從音響播出來」——他是對的。
+  // 警示誇大會被學會忽略，那等於把 v106 搬到畫面上的整個用意作廢。
+  // 正確的說法是說出**失去了什麼**，而不是預測下一次的結果：
+  //   ① 少了備品：處女元素被系統擋下時沒有第二顆可換（09/07 12:25 正是這條）
+  //   ② 少了每次重新爭取音響的機制：從手機出聲的機會上升，但不是必然
+  //   ③ 真正嚴重的是熱身元素也失去授權——那才會只剩嗶聲（08/12 03:34 實測）
+  // 顏色跟著這個層級走：黃＝退化，紅只留給「連備援都沒了」。
   function paintPool() {
     const el = $("poolWarn");
     if (!el) return;
     const ok = elPool.filter(e => e._unlockOK && !e._inUse).length;
     if (!running || !player.src || ok > 3) { el.hidden = true; return; }
+    const warmOK = warmEls.filter(w => !w._inUse && w._unlockOK).length;
     el.hidden = false;
-    el.style.borderColor = ok ? "var(--warn)" : "var(--danger)";
-    el.innerHTML = ok
+    el.style.borderColor = (ok || warmOK) ? "var(--warn)" : "var(--danger)";
+    el.innerHTML = !ok && !warmOK
+      ? "⚠️ <b>播放元素全部用盡</b>——<b>請碰一下畫面任何位置</b>。"
+        + "<span class='hint' style='display:block'>連備援元素都失去播放授權了，接下來的警報可能只會發出嗶聲。</span>"
+      : ok
       ? "⚠️ <b>全新播放元素只剩 " + ok + " 顆</b>——<b>碰一下畫面任何位置</b>就會補滿。"
-        + "<span class='hint' style='display:block'>用完之後警報改由熱身元素播出：仍然會出聲，但每次重新爭取藍牙音響的效果會變差，可能改從手機出來。</span>"
+        + "<span class='hint' style='display:block'>用完之後警報照樣會響、<b>多半也還是從音響出來</b>，只是少了兩層保險：被系統擋下時沒有備品可換，每次重新爭取音響的機制也會失效。</span>"
       : "⚠️ <b>全新播放元素已用完</b>——<b>碰一下畫面任何位置</b>即可補滿。"
-        + "<span class='hint' style='display:block'>現在觸發警報很可能<b>從手機而不是音響</b>出來（補池需要你的觸碰，程式自己補不了）。</span>";
+        + "<span class='hint' style='display:block'>警報仍由備援元素播出，<b>多半還是從音響出來</b>；只是被系統擋下時沒有備品可換，從手機出聲的機會也會變高。不急，順手碰一下就好。</span>";
   }
 
   // —— 每輪播放專屬的淡出引擎：全新 AudioContext 捕捉全新池元素（皆無歷史、
@@ -2732,8 +2748,8 @@
           // 「改用下一顆元素重試」——沒有任何一行說得出路由為什麼變了。
           // 只要**真的接手播放的**是熱身元素，就要在當下講清楚。
           if (el2 && el2._origin === "熱身") {
-            logEvent("🔧 這一次改由熱身元素播放（處女元素池已空）——仍會出聲，但沒有重新爭取藍牙音響，"
-              + "可能會從手機出來。碰一下畫面任何位置可補滿元素池。");
+            logEvent("🔧 這一次改由熱身元素播放（處女元素池已空）——多半仍從音響出來，"
+              + "但這一次沒有重新爭取路由，從手機出聲的機會較高。碰一下畫面任何位置可補滿元素池。");
           }
           paintPool();
           return el2;
