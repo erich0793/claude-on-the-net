@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v107</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v108</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1794,6 +1794,7 @@
       if (!running || document.visibilityState !== "visible") return;
       const t = stream && stream.getAudioTracks()[0];
       if (t && t.readyState === "live") return; // 已經接回來了
+      nextMicTry = 0; // 這一串是使用者剛回到前景才觸發的，退避不該擋它
       recoverMic();
       if (++n < 6) setTimeout(go, 2500);        // 6 次 × 2.5 秒 ＝ 涵蓋 10 秒的逾時還有餘裕
     };
@@ -1803,6 +1804,18 @@
   let recovering = false;
   let micOffAt = 0;      // 主動關閉麥克風的時戳：用來記錄「聽不見」的空窗有多長
   let micOffPlaying = false; // 這次關閉是為了播放（播放期間本來就該關，不是故障）
+  // 09/09 晚上：每一次警報結束後的深度重置都拿不回麥克風，而重連迴圈就這樣
+  // 每 12 秒（3 秒看門狗 ＋ 10 秒逾時）失敗一次、寫一行，一路寫到使用者自己發現。
+  // 三個獨立的傷害：
+  //  ① 洗版：19:29→21:07 那一段就 490 行，整份 800 筆紀錄有八成是同一句話，
+  //     而且 ⚠️ 屬於 IMPORTANT_RE（最後才被裁掉），等於**被保護的噪音**擠掉了所有證據。
+  //  ② 每次嘗試都讓 recovering 為真 10 秒，12 秒週期裡有 10 秒是鎖住的——
+  //     保連脈衝的攔路旗標之一正是它，於是整晚 6 次「音響已 10 分鐘沒有收到任何聲音
+  //     （被「麥克風重連中」擋住）」。麥克風救不回來是一回事，連音響一起賠掉是另一回事。
+  //  ③ 恢復的那一刻反而查不到：micOffPlaying 從播放那次就是 true 而且沒人清掉，
+  //     於是 14 分鐘後接回來時寫的是「麥克風重連：…（播放期間離線 864 秒）」——
+  //     既屬於 ROUTINE_RE（第二批就被裁掉），又謊稱那是播放造成的正常離線。
+  let micFailN = 0, micDeafSince = 0, nextMicTry = 0;
   async function recoverMic(silent) {
     if (recovering || !running || alerting || pulsing || resetting) return;
     const t0 = stream && stream.getAudioTracks()[0];
@@ -1836,8 +1849,18 @@
       const offSecs = micOffAt ? Math.round((Date.now() - micOffAt) / 1000) : 0;
       // 保連正在失敗時不省這一行：那段時間麥克風照樣離線，而失敗的脈衝不會寫出
       // 承載秒數的那一行，省掉就等於把失聰時間藏起來——異常期間一律回到全記錄
-      const routine = silent && micOffAt && offSecs < 10 && !pulseFails && !micOffPlaying;
-      if (routine) routineMicOff = offSecs;
+      const routine = silent && micOffAt && offSecs < 10 && !pulseFails && !micOffPlaying && !micFailN;
+      // 撐過一段真正的失聰之後，「接回來了」是整段紀錄裡最重要的一行——它決定這次失聰
+      // 到底是 14 分鐘還是 98 分鐘。先前它落在下面 micOffPlaying 那一支，寫成
+      //「麥克風重連：…（播放期間離線 864 秒）」：既屬於 ROUTINE_RE（第二批就被裁掉），
+      // 又把一場故障說成播放期間的正常離線（micOffPlaying 從那次播放起就沒人清掉）。
+      // 這一行必須自成一支、帶 ⚠️、講出真實長度。
+      if (micFailN) {
+        logEvent("⚠️ 麥克風已接回（先前連續 " + micFailN + " 次重連失敗，共 "
+          + fmtDry(Date.now() - micDeafSince) + "拿不到麥克風）——這段時間聽不見寶寶");
+        if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已接回");
+      }
+      else if (routine) routineMicOff = offSecs;
       // 播放期間關麥克風是設計行為（iOS 在錄音時會把輸出留在手機喇叭），使用者也知道
       // 正在放音樂——標成 ⚠️ 只會稀釋真正的警訊。⚠️ 留給「沒有理由的失聰」
       else if (micOffPlaying) logEvent("麥克風重連：" + ((track && track.label) || "未知")
@@ -1845,14 +1868,33 @@
       else logEvent((offSecs >= 10 ? "⚠️ 麥克風空窗 " : "麥克風重連：") + ((track && track.label) || "未知")
         + (offSecs ? "（離線 " + offSecs + " 秒）" : ""));
       micOffAt = 0; micOffPlaying = false;
+      micFailN = 0; micDeafSince = 0; nextMicTry = 0;
       if (!silent) {
         if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已自動重新連接");
         logEvent("麥克風中斷後已自動重連");
       }
     } catch (e) {
       if (!micBgFail(e, "麥克風重連")) {
-        setStatus("alert", "麥克風被關閉且無法自動恢復", "請按「停止」後重新開始監聽");
-        logEvent("⚠️ 麥克風中斷且無法自動恢復");
+        micFailN++;
+        if (!micDeafSince) micDeafSince = Date.now();
+        const deaf = fmtDry(Date.now() - micDeafSince);
+        // 退避。前三次照舊立刻再試（真的只是一瞬間的搶佔時就該立刻接回來），
+        // 之後拉開間隔——不是因為慢一點比較容易成功（沒有證據），而是因為
+        // **每一次嘗試都要佔住 recovering 十秒，而保連脈衝正是被它擋住的**。
+        // 09/09 實測 12 秒週期裡有 10 秒鎖著，於是 4 分鐘一次的脈衝幾乎必然撞上，
+        // 整晚 6 次「音響已 10 分鐘沒有收到任何聲音（被「麥克風重連中」擋住）」。
+        // 麥克風救不回來是一回事，把音響一起賠掉是另一回事——退避讓音響保得住。
+        const wait = micFailN <= 3 ? 0 : micFailN <= 10 ? 30000 : 60000;
+        nextMicTry = Date.now() + wait;
+        setStatus("alert", "麥克風中斷，已 " + deaf + "沒有在聽",
+          "系統仍在自動重試；若遲遲沒恢復，按「停止」再重新開始監聽最快");
+        // 同一句話寫 490 行是這個專案第四次踩到的洗版（v89／v93／v95 各一次）。
+        // 門檻是判斷、判斷會錯；節流是結構、不會錯。前三次照記，之後每 10 次一行——
+        // 而每一行都要帶「已經多久沒在聽」，那才是使用者真正需要的數字。
+        if (micFailN <= 3 || micFailN % 10 === 0) {
+          logEvent("⚠️ 麥克風中斷且無法自動恢復（第 " + micFailN + " 次，已 " + deaf + "沒有在聽"
+            + (wait ? "，改為每 " + Math.round(wait / 1000) + " 秒重試一次，讓保連脈衝有空檔送出" : "") + "）");
+        }
       }
     }
     recovering = false;
@@ -1885,6 +1927,7 @@
       const t = stream && stream.getAudioTracks()[0];
       // 背景期間被 iOS 擋掉的那次重連：一回到前景就立刻再試，不必等看門狗的下一輪。
       // 實測 08/30 00:45 使用者一回到前景，3 秒內就接回來了
+      nextMicTry = 0; // 回到前景＝狀況變了，不必等退避
       if (pendingMicRetry) { pendingMicRetry = false; micRetryBurst(); }
       else if (!t || t.readyState === "ended") recoverMic();
       kickLoop();
@@ -1969,6 +2012,8 @@
     const hungEl = curEl();   // 需在 stopAlert 清空 alertEl 前捕捉，卡死保險才盯得到正確元素
     running = false;          // 先標記停止，避免 stopAlert 觸發的麥克風重連又把麥克風打開
     paintPool();              // 沒在監聽就不該掛著「池要見底了」的警示
+    // 失聰的計數與退避以「本次監聽」為範圍（v105 的同一課：跨監聽段的舊值會亂算）
+    micFailN = 0; micDeafSince = 0; nextMicTry = 0;
     if (alerting) stopAlert(); // 停止監聽時也停掉正在播放的警報音
     if (rafId) cancelAnimationFrame(rafId);
     if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
@@ -2581,7 +2626,7 @@
     if (running && was) {
       setStatus("listening", "監聽中…", "已回到偵測狀態");
       logEvent("警報結束，回到監聽");
-      if (manual) recoverMic(true); // 手動停止：直接取回麥克風繼續
+      if (manual) { nextMicTry = 0; recoverMic(true); } // 手動停止：直接取回麥克風繼續，不等退避
       else deepAudioReset();        // 自然結束：深度音訊重置歸位路由，再恢復監聽
     } else if (was) {
       logEvent("播放結束（未在監聽中）");
@@ -2951,7 +2996,9 @@
       // 警報播放與保連脈衝期間麥克風引擎是刻意休眠的，不要喚醒
       if (audioCtx.state !== "running" && !alerting && !pulsing) audioCtx.resume().catch(() => {});
       const t = stream && stream.getAudioTracks()[0];
-      if (!t || t.readyState === "ended") recoverMic();
+      // 退避只套在這條自動重試上。使用者做了什麼事（回到前景、手動停止播放）
+      // 都代表狀況可能變了，那些路徑一律立刻重試，不受退避影響（見 nextMicTry 的清除處）
+      if ((!t || t.readyState === "ended") && Date.now() >= nextMicTry) recoverMic();
     }
 
     // 麥克風不在線（警報播放／保連脈衝）時凍結背景噪音基準——
