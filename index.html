@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v108</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v109</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2772,7 +2772,7 @@
         // 播放嘗試鏈：一顆元素被擋不該讓整次警報啞掉，依序換下一顆再試。
         // 錯誤名稱是分辨病因的關鍵（NotAllowedError＝授權／AbortError＝被打斷／
         // NotSupportedError＝來源），連同元素身分、保連狀態、保鮮時間線一起留證
-        let attempt = 0, srcFixed = false;
+        let attempt = 0, srcFixed = false, sameTry = 0;
         const claim = el2 => {
           alertEl = el2;
           el2._inUse = true;
@@ -2860,6 +2860,11 @@
           if (!pr) { playStarted = true; verifyAudio(el2); return; }
           pr.then(() => {
             playStarted = true; blockedRun = 0;
+            // 這一行是 v109 唯一想換到的證據：延遲重試救回處女元素，代表被拒絕的是
+            //「那一瞬間」而不是「那顆元素」。真機累積幾次就能判定，不必再猜
+            if (sameTry && el2._origin !== "熱身" && el2 !== player) {
+              logEvent("🔧 同一顆元素延遲重試後成功（第 " + sameTry + " 次）——保住了處女元素，路由仍會重新爭取音響");
+            }
             // 注意：這只代表「播放已開始」，不代表喇叭真的有聲音——那要等 verifyAudio 確認
             lastRealAudioAt = Date.now();
             if (cryRec && cryRec.ok === null) { cryRec.ok = true; crySave(); }
@@ -2870,6 +2875,26 @@
               + "｜" + keepState()
               + (lastFreshOK ? "｜距上次保鮮 " + Math.round((Date.now() - lastFreshOK) / 1000) + " 秒" : "｜尚無保鮮紀錄")
               + "）");
+            // NotAllowedError 時**先別換元素**。三次實測（09/07 12:25、09/10 11:22、
+            // 09/11 05:45）形狀一模一樣：被擋的都是剛好把池抽乾的那一顆處女元素，
+            // 而池空了，重試就只剩熱身元素——熱身元素會出聲，但它不會重新爭取藍牙音響，
+            // 於是使用者聽到的是「藍牙沒斷，聲音卻從手機出來」。
+            // 換句話說：**換元素這個動作本身，就是路由跑掉的原因**。
+            // 處女元素是唯一能把路由搶回音響的東西，不該在第一次被拒就丟掉它。
+            // 延遲重試同一顆的代價上限是 1.6 秒；失敗了照樣往下走原本的鏈，沒有損失。
+            // 這一版同時是個實驗：SKILL 記著「剛釋放麥克風那一瞬間是整批拒絕，與元素無關」，
+            // 但 09/10 那次熱身元素在**同一秒**就播成功了，跟「整批」對不起來。
+            // 延遲重試成功 ＝ 病因是時刻；仍然失敗 ＝ 病因在那顆元素身上
+            //（很可能是池元素從解鎖之後就再也沒有被刷新過——保鮮脈衝只照顧熱身元素）。
+            if ((err && err.name) === "NotAllowedError" && sameTry < 2
+                && el2._origin !== "熱身" && el2 !== player) {
+              const wait = sameTry ? 1200 : 400;
+              sameTry++;
+              logEvent("↻ 同一顆元素延遲 " + wait + "ms 再試（" + elTag(el2)
+                + "）——現在換成熱身元素就保不住路由了");
+              setTimeout(() => { if (alerting && curEl() === el2) tryPlay(el2); }, wait);
+              return;
+            }
             attempt++;
             // NotSupportedError ＝ 來源讀不到，換元素沒有用（大家指向同一個網址）。
             // 先把音源從 IndexedDB 重建，再用同一顆元素重試
