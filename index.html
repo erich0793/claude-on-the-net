@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v109</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v110</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -444,7 +444,21 @@
   }
   const LOG_MAX = 800; // 約 50KB，遠低於 localStorage 上限；夠涵蓋好幾晚
   const ROUTINE_RE = /保連脈衝 #\d+ 已送出|麥克風重連：|🫧 保鮮脈衝/;
-  const IMPORTANT_RE = /🔊|⚠️|🔧|🔄|開始監聽|停止監聽|📄|偵測到短聲/;
+  // 「偵測到短聲」自成一層。它原本屬於 IMPORTANT_RE（最後才被裁），但它是全紀錄
+  // 數量最多的一種行：每次觸發固定兩行，加上沒湊成對的單聲，09/14 那份 800 筆的
+  // 紀錄裡約三分之一是它。結果是**被保護的高頻行擠掉了低頻的骨架行**——
+  // 「警報結束」「音訊已重建（取樣率）」「元素池已備妥」「保持連線」全部屬於第四層，
+  // 於是 09/12 22:57→09/13 20:25 那 21 小時只剩觸發行，看不出每次警報有沒有正常收尾、
+  // 重建後的取樣率是多少、池是什麼時候補的。分析時得先自己推論「這是被裁掉還是真的沒發生」，
+  // 而那正是 v103 差點誤判的那種歧義。
+  // 這是 v108 ① 的同一條教訓：分級要問的不是「這行重不重要」，
+  // 而是「這行**重複**的時候還重不重要」。近期的短聲仍然留得住（同層由舊往新裁）。
+  // 但這一層不能無上限地裁：最近那些短聲正是「有聽到卻沒播」的唯一證據，
+  // 調靈敏度時看的就是它們。探針實測（LOG_MAX 縮成 40）：純粹分層會把短聲整層清成 0。
+  // 所以保留一個額度，超過才從最舊的開始裁——約佔紀錄的 7.5%（800 筆時是 60 行）。
+  const BURST_RE = /偵測到短聲/;
+  const BURST_KEEP = Math.max(3, Math.round(LOG_MAX * 0.075));
+  const IMPORTANT_RE = /🔊|⚠️|🔧|🔄|開始監聽|停止監聽|📄/;
   function logEvent(msg) {
     const t = new Date();
     const pad = n => (n < 10 ? "0" : "") + n;
@@ -452,9 +466,12 @@
     // 超量時分層淘汰：例行心跳（診斷、保連脈衝、麥克風重連）會把半夜真正發生的
     // 觸發與警告整批擠掉，隔天就無從回顧。先丟最舊的例行行，重要的事件行留到最後
     while (logArr.length > LOG_MAX) {
-      const i = logArr.findIndex(l => l.indexOf("診斷：") >= 0);
-      const j = i >= 0 ? i : logArr.findIndex(l => ROUTINE_RE.test(l));
-      const k = j >= 0 ? j : logArr.findIndex(l => !IMPORTANT_RE.test(l));
+      let k = logArr.findIndex(l => l.indexOf("診斷：") >= 0);
+      if (k < 0) k = logArr.findIndex(l => ROUTINE_RE.test(l));
+      if (k < 0 && logArr.reduce((n, l) => n + (BURST_RE.test(l) ? 1 : 0), 0) > BURST_KEEP) {
+        k = logArr.findIndex(l => BURST_RE.test(l)); // 只裁超出額度的部分，且一律從最舊的開始
+      }
+      if (k < 0) k = logArr.findIndex(l => !IMPORTANT_RE.test(l));
       logArr.splice(k >= 0 ? k : 0, 1); // 全是重要行時才丟最舊的（保底，不可無限成長）
     }
     try { localStorage.setItem("evlog", JSON.stringify(logArr)); } catch (e) {}
