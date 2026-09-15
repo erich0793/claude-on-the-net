@@ -1,0 +1,305 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>這個網站長什麼樣子</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" />
+<style>
+  /* 配色直接沿用 index.html／guide.html：這一頁是同一個產品的一部分，
+     不該長得像別人做的。因此刻意只做深色一種——app 本身就是深色專用的。 */
+  :root {
+    --bg: #0e1116; --panel: #171c24; --panel-2: #1f2732; --line: #2a3340;
+    --text: #e7edf3; --muted: #97a3b2; --accent: #4dabf7; --accent-2: #7c5cff;
+    --danger: #ff5c72; --ok: #3ddc84; --warn: #ffc857;
+    --cjk: -apple-system, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--cjk); font-size: 15px; line-height: 1.85;
+    padding: 24px 20px 72px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 34px; }
+  a { color: var(--accent); }
+  a:focus-visible, .back:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+  .back {
+    align-self: flex-start; font-size: 14px; padding: 9px 15px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel-2); text-decoration: none;
+  }
+  .back:hover { border-color: var(--accent); }
+
+  h1 { font-size: 27px; line-height: 1.35; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+  h2 {
+    font-size: 17px; margin: 0; letter-spacing: -.005em; text-wrap: balance;
+    padding-left: 11px; border-left: 3px solid var(--accent);
+  }
+  p { margin: 0; }
+  b { color: var(--text); font-weight: 700; }
+  .lede { color: var(--muted); font-size: 16px; }
+  .muted { color: var(--muted); }
+  .sm { font-size: 13.5px; line-height: 1.75; }
+  .mono { font-family: var(--mono); font-size: .88em; letter-spacing: -.01em; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  section { display: flex; flex-direction: column; gap: 14px; }
+
+  /* 主張：整段用邊框圍起來，因為整頁的重點就是「東西被包在哪裡」 */
+  .thesis {
+    border: 1px solid var(--accent); border-radius: 14px; background: var(--panel);
+    padding: 18px 20px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .thesis .big { font-size: 18px; font-weight: 700; line-height: 1.6; text-wrap: balance; }
+
+  /* 手機形狀的容器：這張圖是整頁的論點 */
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .cloud {
+    border: 1px dashed var(--line); border-radius: 12px; background: var(--panel);
+    padding: 12px 18px; text-align: center; max-width: 420px; width: 100%;
+  }
+  .cloud .ttl { font-weight: 700; font-size: 14px; }
+  .arrow { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0; }
+  .arrow .line { width: 2px; height: 22px; background: var(--accent); }
+  .arrow .head {
+    width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent;
+    border-top: 9px solid var(--accent);
+  }
+  .arrow .cap { font-size: 12.5px; color: var(--accent); text-align: center; padding-top: 4px; }
+  .phone {
+    width: 100%; border: 2px solid var(--line); border-radius: 26px; background: var(--panel);
+    padding: 20px 16px 18px; display: flex; flex-direction: column; gap: 14px; position: relative;
+  }
+  .notch {
+    position: absolute; top: 9px; left: 50%; transform: translateX(-50%);
+    width: 74px; height: 5px; border-radius: 3px; background: var(--line);
+  }
+  .phone-label {
+    font-size: 12px; letter-spacing: .12em; color: var(--muted); text-align: center;
+  }
+  .zone { border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); padding: 13px 14px; }
+  .zone > .zh { font-size: 12.5px; letter-spacing: .1em; color: var(--muted); padding-bottom: 9px; }
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .tab { border: 1px solid var(--line); border-radius: 9px; padding: 10px 9px; background: var(--panel); }
+  .tab .t { font-weight: 700; font-size: 14px; }
+  .tab .d { font-size: 12.5px; color: var(--muted); line-height: 1.6; padding-top: 3px; }
+  .drawers { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .drawer { border: 1px solid var(--line); border-radius: 9px; padding: 10px 11px; background: var(--panel); }
+  .drawer .t { font-weight: 700; font-size: 13.5px; }
+  .drawer .k { font-size: 12px; color: var(--muted); line-height: 1.7; padding-top: 4px; }
+
+  /* 檔案表 */
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 430px; }
+  th, td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; letter-spacing: .06em; }
+  td.size { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+
+  /* 資訊流：真的是一段有順序的事，所以才編號 */
+  .flow { display: flex; flex-direction: column; gap: 0; }
+  .step { display: grid; grid-template-columns: 30px 1fr; gap: 13px; }
+  .rail { display: flex; flex-direction: column; align-items: center; }
+  .dot {
+    width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 12px; color: var(--muted); flex: none;
+  }
+  .step.key .dot { border-color: var(--accent); color: var(--accent); }
+  .stem { width: 1px; flex: 1; background: var(--line); min-height: 12px; }
+  .step:last-child .stem { background: transparent; }
+  .body { padding-bottom: 16px; display: flex; flex-direction: column; gap: 4px; }
+  .body .t { font-weight: 700; font-size: 14.5px; }
+  .body .d { font-size: 13.5px; color: var(--muted); line-height: 1.7; }
+  .body .d b { color: var(--text); }
+
+  /* 淘汰順序 */
+  .tiers { display: flex; flex-direction: column; gap: 7px; }
+  .tier {
+    display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: center;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 10px 13px;
+  }
+  .tier .n { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .tier .what { font-size: 13.5px; line-height: 1.6; }
+  .tier .fate { font-size: 12px; white-space: nowrap; font-family: var(--mono); }
+  .tier.first { border-color: var(--danger); }
+  .tier.first .fate { color: var(--danger); }
+  .tier.last { border-color: var(--ok); }
+  .tier.last .fate { color: var(--ok); }
+
+  /* 沒有的東西 */
+  /* 280px 讓它在 760px 寬時剛好排成 2×2——四張卡填滿兩列，不會有一張落單 */
+  .nots { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+  .not { border: 1px solid var(--line); border-radius: 11px; background: var(--panel); padding: 12px 14px; }
+  .not .t { font-weight: 700; font-size: 14px; color: var(--ok); }
+  .not .d { font-size: 13px; color: var(--muted); line-height: 1.7; padding-top: 3px; }
+
+  .note {
+    border-left: 3px solid var(--warn); background: var(--panel); border-radius: 0 10px 10px 0;
+    padding: 12px 15px; font-size: 13.5px; line-height: 1.75;
+  }
+  .note b { color: var(--warn); }
+
+  footer { color: var(--muted); font-size: 13px; line-height: 1.8; border-top: 1px solid var(--line); padding-top: 18px; }
+
+  @media (max-width: 560px) {
+    .tabs { grid-template-columns: 1fr; }
+    .drawers { grid-template-columns: 1fr; }
+    .tier { grid-template-columns: 22px 1fr; }
+    .tier .fate { grid-column: 2; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <a class="back" href="index.html">← 回到偵測器</a>
+
+  <section>
+    <h1>這個網站長什麼樣子</h1>
+    <p class="lede">給非技術背景看的一張地圖：東西放在哪、資料記在哪、以及為什麼它半夜不會「連不上」。</p>
+  </section>
+
+  <div class="thesis">
+    <div class="big">整個「網站」其實只有一個檔案，而且所有事情都在你的 iPhone 裡面發生。</div>
+    <p class="sm muted">沒有伺服器在幫你算任何東西。寶寶的聲音一秒鐘都沒有離開過手機。</p>
+  </div>
+
+  <section>
+    <h2>它是一台電器，不是一間商店</h2>
+    <p class="sm">商店需要後台、倉庫、店員，任何一個環節壞掉你就買不到東西。電器插上電就自己運作。<b>你的 app 是後者</b>——GitHub 只負責把檔案遞過來，之後就沒它的事了。</p>
+
+    <div class="stage">
+      <div class="cloud">
+        <div class="ttl">GitHub Pages</div>
+        <div class="sm muted">網路上的檔案櫃。<br />只做一件事：把檔案原封不動遞出去。</div>
+      </div>
+      <div class="arrow">
+        <div class="line"></div><div class="head"></div>
+        <div class="cap">單向，而且只在你打開網頁的時候</div>
+      </div>
+
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="phone-label">你的 iPhone · Safari</div>
+
+        <div class="zone">
+          <div class="zh">你看得到的三格</div>
+          <div class="tabs">
+            <div class="tab"><div class="t">🎙️ 監聽</div><div class="d">每天晚上用。狀態燈、開始／停止、元素池警示</div></div>
+            <div class="tab"><div class="t">📊 紀錄</div><div class="d">隔天早上看。哭泣時間表、事件紀錄、一鍵複製</div></div>
+            <div class="tab"><div class="t">⚙️ 設定</div><div class="d">設定一次就好。音檔、靈敏度、保持音響連線</div></div>
+          </div>
+        </div>
+
+        <div class="zone">
+          <div class="zh">手機裡的兩個抽屜</div>
+          <div class="drawers">
+            <div class="drawer">
+              <div class="t">便利貼抽屜</div>
+              <div class="k"><span class="mono">localStorage</span>｜只能放小紙條，共 <span class="num">15</span> 張：<br /><span class="num">12</span> 張設定 ＋ <span class="num">3</span> 份紀錄</div>
+            </div>
+            <div class="drawer">
+              <div class="t">倉庫</div>
+              <div class="k"><span class="mono">IndexedDB · babycry</span>｜放那個 <span class="num">10.1 MB</span> 的安撫音檔，便利貼放不下</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="note">兩個抽屜都只存在<b>這一支手機的 Safari 裡</b>。換手機、或清除瀏覽器資料，設定和紀錄都會不見——但反過來說，沒有任何人拿得到。這是刻意的取捨，不是漏做。</p>
+  </section>
+
+  <section>
+    <h2>實際存在的檔案</h2>
+    <div class="scroll">
+      <table>
+        <tr><th>檔案</th><th>大小</th><th>是什麼</th></tr>
+        <tr>
+          <td class="mono">index.html</td><td class="size">213 KB</td>
+          <td><b>整個 app</b>。畫面、偵測演算法、播放邏輯、紀錄，全部擠在這一個檔案裡（<span class="num">3296</span> 行）</td>
+        </tr>
+        <tr><td class="mono">guide.html</td><td class="size">53 KB</td><td>使用說明書</td></tr>
+        <tr><td class="mono">assets/yamnet.tflite</td><td class="size">約 4 MB</td><td>AI 的「腦袋」：Google 用 200 萬支影片訓練的聲音辨識模型</td></tr>
+        <tr><td class="mono">vendor/*.wasm</td><td class="size">—</td><td>讓那個腦袋能在瀏覽器裡跑起來的引擎</td></tr>
+        <tr><td class="mono">architecture.html</td><td class="size">—</td><td>你正在看的這一頁</td></tr>
+        <tr><td class="mono">ambient.html</td><td class="size">18 KB</td><td>另一個獨立小工具，跟偵測器無關</td></tr>
+      </table>
+    </div>
+    <p class="sm muted">AI 模型是<b>從你自己的網址</b>載入的，不是跟 Google 要的。所以第一次載入之後，開飛航模式也能用。</p>
+  </section>
+
+  <section>
+    <h2>寶寶哭的時候，資訊怎麼流動</h2>
+    <div class="flow">
+      <div class="step">
+        <div class="rail"><div class="dot">1</div><div class="stem"></div></div>
+        <div class="body">
+          <div class="t">麥克風收音</div>
+          <div class="d">每秒分析幾十次。<b>分析完立刻丟掉</b>——不錄音、不存檔、不上傳。同時問一下 AI 腦袋：「這像嬰兒哭嗎？」</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="dot">2</div><div class="stem"></div></div>
+        <div class="body">
+          <div class="t">判斷達標</div>
+          <div class="d">例如「<span class="num">0.3</span> 秒、<span class="num">F0≈545Hz</span>、高出背景 <span class="num">15dB</span>、<span class="num">25</span> 秒內第 2 聲」——事件紀錄裡那一長串括號就是這一步的證據。</div>
+        </div>
+      </div>
+      <div class="step key">
+        <div class="rail"><div class="dot">3</div><div class="stem"></div></div>
+        <div class="body">
+          <div class="t">先關掉麥克風，等 <span class="num">800</span> 毫秒</div>
+          <div class="d">iPhone 的規矩：<b>只要麥克風開著，聲音就會被鎖在手機喇叭</b>，藍牙音響收不到。這 <span class="num">800</span> 毫秒是全專案最貴的一個數字。</div>
+        </div>
+      </div>
+      <div class="step key">
+        <div class="rail"><div class="dot">4</div><div class="stem"></div></div>
+        <div class="body">
+          <div class="t">用一顆<b>全新</b>的播放元素播出去</div>
+          <div class="d">iPhone 只有在「沒播過的元素」第一次出聲時，才會重新決定聲音該從哪個喇叭出來。用過的就會賴在原地——這就是「元素池」存在的全部理由，一次備 <span class="num">12</span> 顆，而且<b>只有你碰畫面才補得了</b>。</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="dot">5</div><div class="stem"></div></div>
+        <div class="body">
+          <div class="t">寫一行進便利貼抽屜</div>
+          <div class="d">就是你每天早上複製給我看的那一份。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>紀錄滿了，誰先被丟掉</h2>
+    <p class="sm">事件紀錄最多留 <span class="num">800</span> 筆。滿了不是直接丟最舊的，而是<b>按價值分五層</b>——這樣半夜真正發生的事才不會被例行心跳擠掉。</p>
+    <div class="tiers">
+      <div class="tier first"><div class="n">1st</div><div class="what"><span class="mono">診斷：</span>峰值 ⋯ 那種一長串數字</div><div class="fate">最先丟</div></div>
+      <div class="tier"><div class="n">2nd</div><div class="what">保連脈衝、麥克風重連、保鮮脈衝——每幾分鐘必然出現一次的心跳</div><div class="fate">再丟</div></div>
+      <div class="tier"><div class="n">3rd</div><div class="what"><span class="mono">偵測到短聲</span>——但<b>最近 <span class="num">60</span> 行一定保留</b>，調靈敏度看的就是它們</div><div class="fate">超額才丟</div></div>
+      <div class="tier"><div class="n">4th</div><div class="what">警報結束、音訊已重建、元素池已備妥——每次警報的骨架</div><div class="fate">很後面</div></div>
+      <div class="tier last"><div class="n">5th</div><div class="what">🔊 觸發播放、⚠️ 各種警告、🔧 狀態摘要、開始／停止監聽</div><div class="fate">最後才丟</div></div>
+    </div>
+    <p class="note">第 <span class="num">3</span> 層是 <b>v110</b> 昨天才加的。在那之前「偵測到短聲」被放在最後一層保護，而它佔了整份紀錄約三分之一——實測會把第 <span class="num">4</span> 層整段擠掉，嚴重時連第 <span class="num">5</span> 層的觸發行都被吃掉。<b>被保護的東西，反過來把它要保護的東西吃掉了。</b></p>
+    <p class="sm muted">另外兩份紀錄（哭泣時間表、監聽涵蓋範圍）用的是時間而不是筆數：一律保留 <span class="num">30</span> 天。</p>
+  </section>
+
+  <section>
+    <h2>「沒有的東西」才是重點</h2>
+    <p class="sm">這個架構最重要的特徵，是它<b>刻意不做</b>的那幾件事。</p>
+    <div class="nots">
+      <div class="not"><div class="t">沒有伺服器</div><div class="d">不會當機、不用付月費、不會有人某天把它關掉</div></div>
+      <div class="not"><div class="t">沒有帳號密碼</div><div class="d">沒有東西可以被盜，也不必記任何密碼</div></div>
+      <div class="not"><div class="t">沒有上傳</div><div class="d">主程式裡連一個對外網址都沒有。聲音只在本機即時分析</div></div>
+      <div class="not"><div class="t">沒有網路依賴</div><div class="d">第一次載入之後，斷網、飛航模式都照常運作</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>還有一層你看不到的</h2>
+    <p class="sm">專案裡有一份 <span class="mono">SKILL.md</span>，是<b>踩過的坑的清單</b>：「iOS 在錄音時會把聲音鎖在手機喇叭」「重新整理頁面會沒收播放權限」「同一句警告寫 <span class="num">490</span> 行會把證據擠掉」⋯⋯目前累積了 <span class="num">59</span> 次修改、<span class="num">110</span> 個版本。</p>
+    <p class="sm">它的用途是：<b>下一次要動哪裡之前，先去查有沒有前科。</b>而你每天貼出來的那份紀錄，就是這份清單的原料——這也是為什麼「紀錄裡留得下什麼」值得專門花一個版本去修。</p>
+  </section>
+
+  <footer>
+    對照 <a href="guide.html">📖 使用說明</a>（操作步驟與疑難排解）與 <a href="index.html">偵測器本體</a>。<br />
+    本頁描述的是 v110 的結構。
+  </footer>
+</div>
