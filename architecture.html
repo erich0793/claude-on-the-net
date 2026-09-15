@@ -247,14 +247,14 @@
         <div class="rail"><div class="dot">3</div><div class="stem"></div></div>
         <div class="body">
           <div class="t">先關掉麥克風，等 <span class="num">800</span> 毫秒</div>
-          <div class="d">iPhone 的規矩：<b>只要麥克風開著，聲音就會被鎖在手機喇叭</b>，藍牙音響收不到。這 <span class="num">800</span> 毫秒是全專案最貴的一個數字。</div>
+          <div class="d">iPhone 的規矩：<b>只要麥克風開著，聲音就會被鎖在手機喇叭</b>，藍牙音響收不到。而 iOS 沒有提供任何方法可以問「切好了沒」，只能等——所以這 <span class="num">800</span> 毫秒<b>不是待修的 bug，是買「聲音從音響出來」的價錢</b>。拉長到 <span class="num">3200</span> 毫秒實測過，沒有用；問題不在等多久。</div>
         </div>
       </div>
       <div class="step key">
         <div class="rail"><div class="dot">4</div><div class="stem"></div></div>
         <div class="body">
           <div class="t">用一顆<b>全新</b>的播放元素播出去</div>
-          <div class="d">iPhone 只有在「沒播過的元素」第一次出聲時，才會重新決定聲音該從哪個喇叭出來。用過的就會賴在原地——這就是「元素池」存在的全部理由，一次備 <span class="num">12</span> 顆，而且<b>只有你碰畫面才補得了</b>。</div>
+          <div class="d">iPhone 只有在「沒播過的元素」第一次出聲時，才會重新決定聲音該從哪個喇叭出來。用過的就會賴在原地——這就是「元素池」存在的全部理由，一次備 <span class="num">12</span> 顆，而且<b>只有你碰畫面才補得了</b>。<br /><br /><b>為什麼不備 100 顆？</b>因為解鎖必須擠在「你碰畫面」的<b>同一個瞬間</b>全部完成，不能分批。實測 <span class="num">32</span> 顆就會讓啟動不穩甚至當頁（<span class="num">12</span> 顆長期穩定），而且要等 <span class="num">4</span> 秒才知道到底成功幾顆。一般網頁當掉就重新整理，<b>這個網頁當掉等於那個晚上沒有人在聽</b>。池空之後由三顆「熱身元素」無上限接手——代價就是它們不會重新爭取音響。</div>
         </div>
       </div>
       <div class="step">
@@ -265,6 +265,7 @@
         </div>
       </div>
     </div>
+    <p class="note">第 <span class="num">3</span> 步真正<b>還沒解決</b>的不是那 <span class="num">800</span> 毫秒，而是另一件事：在剛放掉麥克風的那一瞬間，iPhone <b>偶爾會拒絕所有自動播放</b>（紀錄裡的「⚠️ 播放被瀏覽器阻擋」）。實測過同一支手機有時整晚 <span class="num">191</span> 次全成功、有時從第一次就全滅，<b>觸發條件到現在仍然不明</b>。最後一次確認發生是 <span class="num">09/11</span>；<span class="num">v109</span> 起已備好緩解措施——被擋就先延遲重試<b>同一顆</b>，而不是換掉它（換掉就等於自己放棄了音響）。</p>
   </section>
 
   <section>
