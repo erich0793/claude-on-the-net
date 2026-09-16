@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v110</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v111</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -3198,7 +3198,7 @@
     // 脈衝改成 :54 診斷就跟著跑到 :10，整夜每 4 分鐘一行，佔掉紀錄的一半。
     if (!micLive || now < calUntil) stat = null;
     else {
-    if (!stat) stat = { t0: now, n: 0, loud: 0, aud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestDom: 0, bestR: 0, bestF0: 0, mlB: 0, mlA: 0 };
+    if (!stat) stat = { t0: now, n: 0, loud: 0, aud: 0, baby: 0, spec: 0, adult: 0, maxDb: -120, bestDom: 0, bestR: 0, bestF0: 0, mlB: 0, mlA: 0, clip: 0 };
     if (mlFresh) { if (mlScore > stat.mlB) stat.mlB = mlScore; if (mlAdult > stat.mlA) stat.mlA = mlAdult; }
     stat.n++;
     if (loud) stat.loud++;
@@ -3211,6 +3211,13 @@
     // 「那個噪音在幾 Hz」的就只剩頻譜峰值。少了它，診斷行與「條件全滅」的警告
     // 都會退化成一句「F0 一直是 0Hz」，等於把最有用的線索弄丟
     if (db > stat.maxDb) { stat.maxDb = db; stat.bestDom = domFreq; }
+    // db 是 20*log10(rms)，而取樣值理應落在 ±1，所以 0dB 就是滿刻度、不可能為正。
+    // 09/15 的紀錄卻出現兩行「峰值 9dB」「峰值 1dB」（rms 2.8 與 1.1）——
+    // getFloatTimeDomainData 規格上不會截斷，輸入過載時就會吐出超過 ±1 的值。
+    // 那一瞬間 F0、頻譜、高出背景幾 dB 全部不可信，但診斷行上看不出來，
+    // 於是一個正的 dB 值與「我自己的算式寫錯了」長得一模一樣——我剛才就真的去翻了算式。
+    // 數出來、寫在同一行，這個數字就會自己解釋自己。純觀測，不改任何行為。
+    if (db > 0) stat.clip++;
     if (pe.r > stat.bestR) { stat.bestR = pe.r; stat.bestF0 = pe.f0; }
     if (now - stat.t0 > 10000) {
       // 「有明顯聲音」要真的明顯。舊條件 stat.loud > 5 是「600 幀裡有 5 幀」＝ 0.08 秒，
@@ -3246,7 +3253,8 @@
           logEvent("🔧 診斷已達每小時上限（" + DIAG_PER_HOUR + " 行），暫停到下一個整點"
             + "——可能是這段時間環境真的很吵，也可能是門檻訂得太鬆；看上面幾行的「明顯%」就分得出來");
         } else if (diagCount <= DIAG_PER_HOUR) {
-        logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 明顯" + pc("aud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + " 峰頻" + stat.bestDom.toFixed(0) + "Hz" + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : ""));
+        logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 明顯" + pc("aud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + " 峰頻" + stat.bestDom.toFixed(0) + "Hz" + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : "")
+          + (stat.clip ? "｜⚠️ 訊號爆表 " + stat.clip + " 幀（超過滿刻度，這段的數值不可信）" : ""));
         }
         // 「聽得到聲音，但基頻與頻譜一個都沒過」＝ dspCry 的 (babyPitch || spectralCry)
         // 恆為假，寶寶再怎麼哭都觸發不了。迴圈活著、麥克風活著、紀錄照寫，只有偵測是死的——
