@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v111</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v112</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2992,6 +2992,11 @@
   // 到達上限時一定要留一行說明：靜默地丟掉紀錄的機制查不出失效，這是本專案的老教訓。
   const DIAG_PER_HOUR = 10;
   let diagHour = -1, diagCount = 0;
+  // 上限那一行原本寫「看上面幾行的『明顯%』就分得出來」，但診斷行是**第一批**被裁掉的，
+  // 而上限那行帶 🔧 屬於最後一批。09/18 那份 800 筆的紀錄：8 行上限訊息全在，
+  // 0 行診斷——它叫你去看的東西，每一次都已經被刪掉了。
+  // 這是 v103 那條教訓的再一次應用：**訊息指向的資料若比訊息先消失，訊息就得自己帶著資料。**
+  let diagAud = [], diagPk = -120;
   let loopTicks = 0; // 迴圈生命跡象：由迴圈外的看門狗檢查（見 loopWatchdog）
   function loop() {
     if (!running) return;
@@ -3239,19 +3244,26 @@
       const notable = frac("aud") >= 0.05
                    || (frac("aud") >= 0.02 && (frac("baby") >= 0.20 || frac("spec") >= 0.20));
       const hr = Math.floor(Date.now() / 3600000);
-      if (hr !== diagHour) { diagHour = hr; diagCount = 0; }
+      if (hr !== diagHour) { diagHour = hr; diagCount = 0; diagAud = []; diagPk = -120; }
       if (notable && !alerting) {
         const pc = k => Math.round(stat[k] / stat.n * 100) + "%";
         // 上限只管診斷行本身。下面的「條件全滅」是警訊、有自己的節流，
         // 不能因為診斷太多就跟著閉嘴——會漏掉的正是最該講的那一次。
         diagCount++;
+        diagAud.push(stat.aud / stat.n);
+        if (stat.maxDb > diagPk) diagPk = stat.maxDb;
         if (diagCount === DIAG_PER_HOUR + 1) {
           // 措辭不可以斷定原因。原本寫「這通常代表門檻訂得太鬆」，但 08/31 03:31–03:37
           // 第一次真的觸頂時，房間是真的很吵（峰值 -19～-46dB、背景 -66，明顯 5～16%），
           // 門檻一點問題都沒有。上限只知道「寫太多了」，不知道為什麼——
           // 把兩種可能都講出來，讓看紀錄的人自己用旁邊的數字判斷
+          const srt = diagAud.slice().sort((x, y) => x - y);
+          const med = srt.length ? srt[Math.floor(srt.length / 2)] : 0;
+          const mx = srt.length ? srt[srt.length - 1] : 0;
           logEvent("🔧 診斷已達每小時上限（" + DIAG_PER_HOUR + " 行），暫停到下一個整點"
-            + "——可能是這段時間環境真的很吵，也可能是門檻訂得太鬆；看上面幾行的「明顯%」就分得出來");
+            + "——這一小時「明顯%」中位數 " + Math.round(med * 100) + "%、最高 " + Math.round(mx * 100)
+            + "%，最大峰值 " + diagPk.toFixed(0) + "dB。可能是這段時間環境真的很吵，也可能是門檻訂得太鬆"
+            + "（數字直接寫在這裡：診斷行是最先被裁掉的一層，事後多半已經看不到了）");
         } else if (diagCount <= DIAG_PER_HOUR) {
         logEvent("診斷：峰值 " + stat.maxDb.toFixed(0) + "dB（背景 " + noiseFloor.toFixed(0) + "）｜音量" + pc("loud") + " 明顯" + pc("aud") + " 基頻" + pc("baby") + " 頻譜" + pc("spec") + " 大人" + pc("adult") + "｜F0=" + stat.bestF0.toFixed(0) + "Hz r=" + stat.bestR.toFixed(2) + " 峰頻" + stat.bestDom.toFixed(0) + "Hz" + (mlReady && mlCk.checked ? "｜AI嬰 " + Math.round(stat.mlB * 100) + "% AI人 " + Math.round(stat.mlA * 100) + "%" : "")
           + (stat.clip ? "｜⚠️ 訊號爆表 " + stat.clip + " 幀（超過滿刻度，這段的數值不可信）" : ""));
