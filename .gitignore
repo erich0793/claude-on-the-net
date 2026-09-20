@@ -141,3 +141,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# 探針用的測試副本：由 scratchpad 裡的 make_t_*.py 從 index.html 即時產生，
+# 每次驗證完就刪掉（rm -f __*.html），不屬於專案內容
+__*.html
