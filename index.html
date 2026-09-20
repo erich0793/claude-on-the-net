@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v112</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v113</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2789,7 +2789,10 @@
         // 播放嘗試鏈：一顆元素被擋不該讓整次警報啞掉，依序換下一顆再試。
         // 錯誤名稱是分辨病因的關鍵（NotAllowedError＝授權／AbortError＝被打斷／
         // NotSupportedError＝來源），連同元素身分、保連狀態、保鮮時間線一起留證
-        let attempt = 0, srcFixed = false, sameTry = 0;
+        // sameEl／sameFailTag：09/19 20:50 那一次，v109 的實驗終於送回第一筆資料，
+        // 而我必須把六行紀錄用手排成時間軸才看得出答案——紀錄知道結論，卻沒有說出來。
+        // 這兩個變數就是為了讓它說出來（見下面成功分支的兩行）。
+        let attempt = 0, srcFixed = false, sameTry = 0, sameEl = null, sameFailTag = "";
         const claim = el2 => {
           alertEl = el2;
           el2._inUse = true;
@@ -2878,9 +2881,23 @@
           pr.then(() => {
             playStarted = true; blockedRun = 0;
             // 這一行是 v109 唯一想換到的證據：延遲重試救回處女元素，代表被拒絕的是
-            //「那一瞬間」而不是「那顆元素」。真機累積幾次就能判定，不必再猜
-            if (sameTry && el2._origin !== "熱身" && el2 !== player) {
-              logEvent("🔧 同一顆元素延遲重試後成功（第 " + sameTry + " 次）——保住了處女元素，路由仍會重新爭取音響");
+            //「那一瞬間」而不是「那顆元素」。真機累積幾次就能判定，不必再猜。
+            // v113 修正判斷式：原本只看 `sameTry && 不是熱身`，可是池裡還有貨的時候，
+            // 鏈上的**下一顆處女元素**也滿足這兩個條件——那會印出「同一顆元素重試後成功」，
+            // 而成功的根本是另一顆。09/19 那次剛好池已空、接手的是熱身元素才沒印錯。
+            // 要斷言「同一顆」，就得真的比對是不是同一顆。
+            if (sameTry && el2 === sameEl) {
+              logEvent("🔧 同一顆元素延遲重試後成功（第 " + sameTry + " 次）——被拒絕的是**那一瞬間**，不是這顆元素；"
+                + "處女元素保住了，路由仍會重新爭取音響");
+            } else if (sameFailTag && el2 !== sameEl) {
+              // 相反的結論。這一行是 v109 那個實驗的答案，必須寫在紀錄裡——
+              // 否則下次還是得把六行 ⚠️／↻ 手工排成時間軸才看得出來。
+              logEvent("🔬 實驗結論：同一顆元素連擋 3 次（" + sameFailTag + "），"
+                + "幾乎同一瞬間改用 " + elTag(el2) + " 卻一次就成功——"
+                + "所以擋下來的是**那一顆元素**，不是那個時刻。"
+                + (el2._origin === "熱身"
+                    ? "接手的是熱身元素（每 4 分鐘被保鮮脈衝刷新過），而池元素從解鎖之後就再也沒刷新過，兩者差別正在這裡。"
+                    : "接手的同樣是處女元素，所以不是「處女元素整批失效」。"));
             }
             // 注意：這只代表「播放已開始」，不代表喇叭真的有聲音——那要等 verifyAudio 確認
             lastRealAudioAt = Date.now();
@@ -2906,12 +2923,15 @@
             if ((err && err.name) === "NotAllowedError" && sameTry < 2
                 && el2._origin !== "熱身" && el2 !== player) {
               const wait = sameTry ? 1200 : 400;
-              sameTry++;
+              sameTry++; sameEl = el2;
               logEvent("↻ 同一顆元素延遲 " + wait + "ms 再試（" + elTag(el2)
                 + "）——現在換成熱身元素就保不住路由了");
               setTimeout(() => { if (alerting && curEl() === el2) tryPlay(el2); }, wait);
               return;
             }
+            // 延遲重試已經用完、而且用完在同一顆元素上：把當下的身分抄下來（齡與 rs 之後會變），
+            // 留給上面那條「實驗結論」比對用
+            if (sameEl === el2 && !sameFailTag) sameFailTag = elTag(el2);
             attempt++;
             // NotSupportedError ＝ 來源讀不到，換元素沒有用（大家指向同一個網址）。
             // 先把音源從 IndexedDB 重建，再用同一顆元素重試
