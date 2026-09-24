@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v113</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v114</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2499,6 +2499,21 @@
   // 這裡改用 3KB 無聲小檔：不必送到音響，所以**不碰麥克風**、偵測零中斷，
   // 純粹讓頁面「持續有播放活動」並刷新熱身元素的授權。
   let freshTimer = null, freshN = 0, freshIdx = 0, lastFreshOK = 0;
+  // 熱身元素有**兩條**刷新路徑，而被擋紀錄以前只看得到其中一條：
+  //   ① 保連脈衝順帶（rider）→ 更新 lastWarmOK
+  //   ② 無聲保鮮脈衝          → 更新 lastFreshOK
+  // 而 ② 刻意在 ① 正常運作時整個跳過（見下面 freshPulse 的早退）。所以
+  //「保連開著、一切正常」時 lastFreshOK 會永遠停在很久以前——這不是故障，是設計。
+  // 09/24 07:50 被擋的那一行寫「距上次保鮮 41039 秒」（11.4 小時），
+  // 讀起來像保鮮機制死了半天；實際上 rider 每 4 分鐘都刷新過熱身元素
+  //（同一份紀錄裡 #320／#330 兩則脈衝就寫著「順帶熱身#3／#1」）。
+  // 這一行是本專案診斷路由問題最重要的一行，它不可以指向錯的嫌犯。
+  function warmFreshTag() {
+    const t = Math.max(lastWarmOK || 0, lastFreshOK || 0);
+    if (!t) return "｜熱身元素尚未被刷新過";
+    return "｜熱身元素距上次刷新 " + Math.round((Date.now() - t) / 1000) + " 秒（"
+      + ((lastWarmOK || 0) >= (lastFreshOK || 0) ? "保連順帶" : "無聲保鮮") + "）";
+  }
   function freshPulse() {
     if (!running || alerting || resetting) return;
     // 讓位的前提是「熱身元素確實有被刷新」，不是「保連脈衝有在跑」。
@@ -2896,7 +2911,8 @@
                 + "幾乎同一瞬間改用 " + elTag(el2) + " 卻一次就成功——"
                 + "所以擋下來的是**那一顆元素**，不是那個時刻。"
                 + (el2._origin === "熱身"
-                    ? "接手的是熱身元素（每 4 分鐘被保鮮脈衝刷新過），而池元素從解鎖之後就再也沒刷新過，兩者差別正在這裡。"
+                    ? "接手的是熱身元素（每 4 分鐘被刷新一次——多半是保連脈衝順帶，保連停擺時由無聲保鮮接手），"
+                      + "而池元素從解鎖之後就再也沒被碰過，兩者差別正在這裡。"
                     : "接手的同樣是處女元素，所以不是「處女元素整批失效」。"));
             }
             // 注意：這只代表「播放已開始」，不代表喇叭真的有聲音——那要等 verifyAudio 確認
@@ -2907,7 +2923,7 @@
             logEvent("⚠️ 播放被瀏覽器阻擋（" + ((err && err.name) || "未知") + "｜" + elTag(el2)
               + " " + (document.visibilityState === "visible" ? "前景" : "背景")
               + "｜" + keepState()
-              + (lastFreshOK ? "｜距上次保鮮 " + Math.round((Date.now() - lastFreshOK) / 1000) + " 秒" : "｜尚無保鮮紀錄")
+              + warmFreshTag()
               + "）");
             // NotAllowedError 時**先別換元素**。三次實測（09/07 12:25、09/10 11:22、
             // 09/11 05:45）形狀一模一樣：被擋的都是剛好把池抽乾的那一顆處女元素，
