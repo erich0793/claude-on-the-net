@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v114</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v115</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -193,6 +193,7 @@
       <span class="dot" id="dot"></span>
       <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
     </div>
+    <div id="routeWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--danger); background:var(--panel-2); line-height:1.5"></div>
     <div id="poolWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--warn); background:var(--panel-2); line-height:1.5"></div>
     <div class="row">
       <button class="primary" id="startBtn" style="font-size:16px; padding:14px 20px">🎙️ 開啟麥克風並開始監聽</button>
@@ -1367,6 +1368,7 @@
     cooldownUntil = performance.now() + 30000;
     logEvent(byUser ? "手動停止播放，30 秒內暫不重新觸發"
                     : "⚠️ 播放被系統中斷（沒有手勢，可能是音訊路由改變，例如藍牙斷線），30 秒內暫不重新觸發");
+    if (!byUser) { routeLostAt = Date.now(); routeLostN = 0; paintRoute(); }
     if (running) setStatus("listening", "監聽中…", byUser ? "已手動停止，30 秒內暫不重新觸發"
                                                           : "播放被系統中斷，30 秒內暫不重新觸發");
   }
@@ -1458,7 +1460,28 @@
   //   ② 少了每次重新爭取音響的機制：從手機出聲的機會上升，但不是必然
   //   ③ 真正嚴重的是熱身元素也失去授權——那才會只剩嗶聲（08/12 03:34 實測）
   // 顏色跟著這個層級走：黃＝退化，紅只留給「連備援都沒了」。
+  // v115：藍牙斷線是**只有使用者修得好**的故障，卻只寫在紀錄裡（五之三之七的同一課）。
+  // 09/25 08:11:47 系統中途停掉播放，當下狀態列有寫一句，但 40 秒後下一次警報就把它蓋掉了；
+  // 之後 5 次警報全從手機出來，使用者 09:18 才發現——整整 67 分鐘，畫面上一個字都沒有。
+  // 這塊提示要**一直掛著**，直到有人碰畫面為止（碰了就代表有人在看），
+  // 並且數出這段期間已經播了幾次，讓人知道這段退化持續了多久。
+  // 措辭只說確定的那一半：iOS 在輸出裝置改變時會自動停掉媒體，這是機制；
+  // 但來電、其他 App 搶音訊也會觸發同一個訊號，所以不能斷言一定是藍牙。
+  let routeLostAt = 0, routeLostN = 0;
+  function paintRoute() {
+    const el = $("routeWarn");
+    if (!el) return;
+    if (!running || !routeLostAt) { el.hidden = true; return; }
+    const d = new Date(routeLostAt), hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    el.hidden = false;
+    el.innerHTML = "🔇 <b>" + hm + " 播放被系統從中途停掉——請檢查藍牙音響是否還開著、還連著</b>"
+      + "<span class='hint' style='display:block'>"
+      + (routeLostN ? "之後已有 <b>" + routeLostN + " 次</b>警報，" : "之後的警報")
+      + "如果是從手機出聲，就是這個原因。iOS 在輸出裝置改變（例如藍牙斷線）時會自動停掉播放；"
+      + "來電或其他 App 搶走音訊也會。處理好之後<b>碰一下畫面</b>，這則提示就會消失。</span>";
+  }
   function paintPool() {
+    paintRoute(); // 兩塊畫面警示同一批呼叫點：任何重畫池警示的時機，也是重畫這塊的時機
     const el = $("poolWarn");
     if (!el) return;
     const ok = elPool.filter(e => e._unlockOK && !e._inUse).length;
@@ -1524,6 +1547,12 @@
   // 監聽中才做，且池滿時 topUpPool 直接空轉，成本為零
   document.addEventListener("pointerdown", () => {
     lastGestureAt = Date.now(); // 播放被停掉時要靠它分辨是使用者按的還是系統中斷的
+    // 關掉「藍牙可能斷線」提示，並記下它掛了多久、期間播了幾次——這就是這段退化的實際長度
+    if (routeLostAt && Date.now() - routeLostAt > 2000) {
+      logEvent("🔧 已有人看到「播放被系統中斷」提示（掛了 " + fmtDry(Date.now() - routeLostAt)
+        + "，期間 " + routeLostN + " 次警報）");
+      routeLostAt = 0; routeLostN = 0; paintRoute();
+    }
     // 只在真的快見底時才補（過去只要少一顆就補，等於每次碰畫面都來一次
     // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿。
     // 數的必須是「還能播的顆數」而不是總顆數：無手勢補鑄出來的死元素照樣算進長度，
@@ -2748,6 +2777,7 @@
         logEvent("🔧 元素池已用盡，之後改用熱身元素（沒有手勢就無法補鑄，「每次都用全新元素」的路由重新仲裁失效）");
       }
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
+      if (routeLostAt) routeLostN++;
       paintPool();      // 池是在這裡被消耗的，畫面要當場跟上
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       // 「元素在前進」抓不到的另一種無聲：**播的是對的檔案嗎？音量對嗎？**
