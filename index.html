@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v115</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v116</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -459,7 +459,11 @@
   // 所以保留一個額度，超過才從最舊的開始裁——約佔紀錄的 7.5%（800 筆時是 60 行）。
   const BURST_RE = /偵測到短聲/;
   const BURST_KEEP = Math.max(3, Math.round(LOG_MAX * 0.075));
-  const IMPORTANT_RE = /🔊|⚠️|🔧|🔄|開始監聽|停止監聽|📄/;
+  // 🔬（v113 的實驗結論）原本不在這裡，於是落在第四層、比它摘要的那幾行 ⚠️ 原始痕跡**更早**被裁掉。
+  // 10/01 那份 800 筆、6 天半的紀錄：09/26 兩次被擋的 ⚠️ 全在，兩行 🔬 都沒了——
+  // 而其中 00:26 那一次正是整個實驗最關鍵的一筆（接手的是另一顆處女元素）。
+  // 結論比原始資料先消失，等於又得靠人工排時間軸；這正是 v113 想消滅的事。
+  const IMPORTANT_RE = /🔊|⚠️|🔧|🔄|🔬|開始監聽|停止監聽|📄/;
   function logEvent(msg) {
     const t = new Date();
     const pad = n => (n < 10 ? "0" : "") + n;
@@ -2614,6 +2618,7 @@
   // 哭一次、音樂就播一次；斷線那晚有 3 小時 37 分完全沒有音樂，只剩保連脈衝。
   // 兩晚的保連紀錄一模一樣，所以差異只可能在這裡——把它寫進紀錄才有辦法驗證
   let lastRealAudioAt = 0;
+  let alertBegunAt = 0; // 本輪播放的開始時刻：用來判斷「這一輪有沒有真的出聲」（見 stopAlert）
   function fmtDry(ms) {
     const m = ms / 60000;
     return m < 90 ? Math.round(m) + " 分鐘" : (m / 60).toFixed(1) + " 小時";
@@ -2659,6 +2664,13 @@
     const fc = fadeCtx, fg = fadeGain;
     fadeCtx = null; fadeGain = null; // 立刻讓位給下一輪播放
     alerting = false; cryMs = 0;
+    // 「最近一次真的有音樂送到音響」要記在**播放結束**這一刻，不是開始那一刻。
+    // 只在開始時記的話，一段 30 分鐘的手動播放一結束，看門狗就算出「音響已 30 分鐘沒聽到任何聲音」——
+    // 09/25 13:08（手動播 10 分鐘）與 09/27 13:43（手動播 30 分鐘）都在播完的那一刻這樣喊，
+    // 而那正是音響**剛剛連續收了半小時音樂**、最不可能睡著的時候（v101 修過同一種假警報，
+    // 當時只顧到警報播放，漏了時長由使用者決定的手動播放）。
+    // 只有這一輪真的開始出聲（lastRealAudioAt 落在本輪開始之後）才算，被擋到只剩嗶聲的不算。
+    if (was && lastRealAudioAt && lastRealAudioAt >= alertBegunAt) lastRealAudioAt = Date.now();
     alertEl = null; // 池元素用完即棄，不回收
     setTimeout(paintPool, 0); // 熱身元素放手後可用顆數會變，等這一輪收尾完再畫
     el.loop = false;
@@ -2727,7 +2739,7 @@
   // minsOverride：手動播放時由選單當場指定；偵測觸發則沿用「觸發後播放時長」設定
   function trigger(reason, minsOverride) {
     if (alerting) return;
-    alerting = true; cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
+    alerting = true; alertBegunAt = Date.now(); cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
     const evPeakAtTrig = evPeakDb; evPeakDb = -120; burstPeakDb = -120; // 讀走這次的證據峰值後歸零，不留給下一次
     if (player.src) {
       const mins = minsOverride || playDur.value;
@@ -2940,10 +2952,13 @@
               logEvent("🔬 實驗結論：同一顆元素連擋 3 次（" + sameFailTag + "），"
                 + "幾乎同一瞬間改用 " + elTag(el2) + " 卻一次就成功——"
                 + "所以擋下來的是**那一顆元素**，不是那個時刻。"
+                // v116 拿掉了熱身那一支原本的因果斷言（「熱身元素有被刷新、池元素沒有，差別正在這裡」）。
+                // 09/26 00:26 推翻了它：#64 連擋 3 次之後，接手的是池裡**另一顆同樣從沒被刷新過**的處女元素，
+                // 一次就成功。所以「有沒有被刷新」解釋不了；能確定的只有「是那一顆」。
+                // 紀錄只寫觀察得到的事實，原因留給累積起來的資料去回答。
                 + (el2._origin === "熱身"
-                    ? "接手的是熱身元素（每 4 分鐘被刷新一次——多半是保連脈衝順帶，保連停擺時由無聲保鮮接手），"
-                      + "而池元素從解鎖之後就再也沒被碰過，兩者差別正在這裡。"
-                    : "接手的同樣是處女元素，所以不是「處女元素整批失效」。"));
+                    ? "接手的是熱身元素。"
+                    : "接手的同樣是處女元素（從解鎖後也沒被刷新過），所以差別不在「有沒有被刷新」，在那一顆元素本身。"));
             }
             // 注意：這只代表「播放已開始」，不代表喇叭真的有聲音——那要等 verifyAudio 確認
             lastRealAudioAt = Date.now();
