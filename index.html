@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v116</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v117</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -861,7 +861,12 @@
     const mins = b.dataset.m;
     localStorage.setItem("manualDur", mins);
     showManualMenu(false);
-    unlockAll(); // 趁這次手勢把池、熱身、保連音軌一起解鎖——播完可能會自動接手站崗（無手勢）
+    // 趁這次手勢把池、熱身、保連音軌一起解鎖——播完可能會自動接手站崗（無手勢）。
+    // 多補一顆（v117）：手動播放下一行就會用掉池裡一顆。以前是讓播完後的「自動開始偵測」
+    // 把它補回來，而那是計時器——沒有手勢。沒有手勢時補出來的元素，靜音解鎖照樣成功（✓），
+    // 真正出聲時卻被 iOS 以 NotAllowedError 擋下。10 次「最後一顆被擋」追回出生時刻，
+    // 每一顆都是這樣來的（見 start() 的註解）。所以要用的那一顆，在手勢還在的時候就先補好
+    unlockAll(1);
     if (player.src && !alerting) trigger("手動播放", mins);
   });
   $("manualCancel").addEventListener("click", () => showManualMenu(false));
@@ -1386,8 +1391,10 @@
   // 現在「無上限」已由熱身元素負責，池只要夠應付一晚前幾次觸發即可——
   // 回到長期穩定的 12。
   const POOL_N = 12;
-  function topUpPool() {
+  // extra：這次手勢之後「馬上就會用掉」幾顆。手動播放就是一顆（見 manualOpts）。
+  function topUpPool(extra) {
     if (!player.src) return;
+    const want = POOL_N + (extra || 0);
     // 先清掉「生出來就沒解鎖成功」的元素。少了這一步，一次無手勢的補鑄
     // （例如自動重載後）會用 12 顆永遠播不動的元素把池佔滿，而 while 只看數量，
     // 之後使用者再怎麼碰畫面都補不進新的——實測 08/16 16:46 就是卡在這裡，
@@ -1400,7 +1407,7 @@
     }
     const before = elPool.length;
     if (elPool.length < POOL_N) { poolDryLogged = false; poolLowLogged = false; } // 有補進新元素就重新計一次
-    while (elPool.length < POOL_N) {
+    while (elPool.length < want) {
       const el = new Audio(silentUrl()); // 用無聲小檔解鎖；解鎖狀態屬於元素，換源後仍有效
       el._born = Date.now();
       el.setAttribute("x-webkit-airplay", "allow");
@@ -1571,8 +1578,10 @@
   // 在部分 iOS 版本會漏出一瞬音樂，已移除。
 
   let starting = false; // 啟動中：擋掉「沒反應再按一次」造成的並行麥克風請求
-  async function start() {
+  // ev：只有開始按鈕的 click 會帶著事件進來；計時器、回到前景、重載後自動恢復都是 start()。
+  async function start(ev) {
     if (starting || running) return;
+    const viaGesture = !!(ev && ev.isTrusted);
     starting = true;
     pendingAutoStart = false; // 使用者自己按了，或延後的接手已經啟動：旗標任務結束
     const startT0 = Date.now(); // 逾時訊息要講真話：背景分頁計時器被凍結時，實際等待遠不只 10 秒
@@ -1581,7 +1590,23 @@
     // 必須在任何 await 之前，才算在使用者手勢內（iOS 才允許之後自動播放）
     unlockKeeper(); // 保連音軌兼任解鎖，無論有無勾選保持連線都需解鎖
     unlockWarm();   // 熱身元素：池用完後的無上限備援
-    topUpPool();    // 補滿處女警報元素池（以無聲小檔解鎖）
+    // 補池只在手勢裡做（v117）。沒有手勢時補出來的元素，靜音解鎖照樣會成功、標成 ✓，
+    // 但 iOS 只認「在手勢裡播過」的元素，之後真正出聲時會以 NotAllowedError 擋下。
+    // 「手動播放 → 播完自動開始偵測」正是一條沒有手勢的 start()：手動播放用掉一顆，
+    // 這裡再補一顆，補出來的就是那顆啞彈。它永遠排在池的最後（先進先出），
+    // 所以每一次都是「剛好把池抽乾的那一顆」被擋——09/07 起 10 次被擋，追得到出生時刻的
+    // 7 次全是它（另 3 次編號吻合），而在手勢裡補的最後一顆從沒被擋過。
+    // 09/26 00:26 那一筆最清楚：#64（自動開始偵測時補的）連擋 3 次，同一秒接手的 #65
+    //（手動播放的手勢裡補的）一次就成功。
+    // 這不是新發現的鐵律——08/01 就證明過「無手勢補鑄全數被擋」並拿掉了，只是這條路徑漏網。
+    if (viaGesture) topUpPool();
+    else {
+      // 池偏少時（例如自動重載後是 0 顆）要明說請人碰畫面——以前這一句由 topUpPool 的
+      //「播放權限不足」負責，現在這條路徑不補了，提醒就得在這裡給
+      const have = elPool.filter(e => !e._inUse).length, low = have < POOL_N / 2;
+      logEvent((low ? "⚠️ " : "🔧 ") + "自動開始偵測：這一刻沒有使用者手勢，不補播放元素（池目前 " + have + " 顆）——"
+        + "沒有手勢時補出來的元素，播放時會被 iOS 擋下" + (low ? "。請碰一下畫面任何位置補滿" : ""));
+    }
     keeperOn();
     freshOn();      // 無聲保鮮：不論保連是否可用，都要維持播放權限
     try {
@@ -2156,7 +2181,7 @@
   // 手動播放的手勢只補了元素池，沒碰保連音軌；接著「播完自動開始偵測」是計時器
   // 呼叫 start()，那時已經沒有手勢，保連音軌整晚沒有無手勢播放權，脈衝 100% 被擋。
   // 手勢很珍貴，能一次解鎖就別漏掉任何一種
-  function unlockAll() { unlockKeeper(); unlockWarm(); topUpPool(); }
+  function unlockAll(extra) { unlockKeeper(); unlockWarm(); topUpPool(extra); }
 
   // 「🔈 重新取得喇叭」：聲音跑到手機、只有重新整理救得回來時的手動自救。
   // 08/22 20:55／21:44 兩次警報從手機出聲，22:21 重新整理後才回到藍牙喇叭。
@@ -2707,7 +2732,8 @@
       // 讓人以為還在播（手動播放結束後最常看到這一幕）
       if (lastAlertManual && autoWatchCk.checked) {
         // 哄睡音樂播完（或被按停）就自動接手站崗。元素池在按下手動播放時已於
-        // 手勢內補滿，麥克風權限也已是「允許」，所以這裡不需要新的手勢；
+        // 手勢內補滿（v117 起連手動播放用掉的那一顆也一起補），麥克風權限也已是「允許」，
+        // 所以這裡不需要新的手勢——**也絕不能在這裡補元素**（見 start() 的註解）；
         // 萬一 iOS 仍拒絕，start() 內建的逾時會把按鈕交還給使用者
         logEvent("手動播放結束，依設定自動開始偵測"
           + (keepCk.checked && !keeperGestureOK ? "──⚠️ 保連音軌尚未解鎖，請碰一下畫面" : ""));

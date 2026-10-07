@@ -13,6 +13,7 @@ subs = [
      '  window.__poolOK = () => elPool.filter(e => e._unlockOK && !e._inUse).length;\n'
      '  window.__killWarm = () => { warmEls.forEach(w => { w._unlockOK = false; }); };\n'
      '  window.__paintPool = () => paintPool();\n'
+     '  window.__pool = () => elPool.slice();\n'
      + anchor),
 ]
 for a, b in subs:
