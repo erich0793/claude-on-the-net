@@ -14,6 +14,7 @@ subs = [
      '  window.__killWarm = () => { warmEls.forEach(w => { w._unlockOK = false; }); };\n'
      '  window.__paintPool = () => paintPool();\n'
      '  window.__pool = () => elPool.slice();\n'
+     '  window.__curEl = () => curEl();\n'
      + anchor),
 ]
 for a, b in subs:

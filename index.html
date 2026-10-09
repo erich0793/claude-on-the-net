@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v117</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v118</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -306,7 +306,7 @@
     <div class="hint" style="margin-top:4px">監聽中按試聽，聲音會經 iOS 通話管線而失真——要判斷音質，請在未監聽時試聽。</div>
 
     <details id="trimBox" style="display:none; margin-top:14px">
-      <summary>✂️ 剪短音檔（在你的裝置上處理，不會上傳）</summary>
+      <summary>✂️ 剪短音檔／🔉 調整音量（在你的裝置上處理，不會上傳）</summary>
       <div style="height:10px"></div>
       <div class="kv" style="margin:0 0 10px">
         <span>目前音檔長度 <b id="origDur">讀取中…</b></span>
@@ -318,8 +318,20 @@
         <label style="font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px"><input type="checkbox" id="trimMono" checked> 轉單聲道（檔案減半）</label>
       </div>
       <div class="hint" id="trimEst" style="margin-top:8px">剪出來大約 <b style="color:var(--text)">–</b>（輸出為未壓縮 WAV；越小越不容易被系統回收）</div>
+      <div class="ctl" style="margin-top:14px">
+        <label><span>🔉 音檔音量</span><span id="volNow"></span></label>
+        <select id="fileVol" style="width:100%; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text)">
+          <option value="100">100%（原始音量）</option>
+          <option value="70">70%（約小 3 分貝）</option>
+          <option value="50">50%（約小 6 分貝）</option>
+          <option value="35">35%（約小 9 分貝）</option>
+          <option value="25">25%（約小 12 分貝）</option>
+        </select>
+        <div class="hint" style="margin-top:6px">把音檔本身調小：從手機或音響播、手動或偵測觸發，<b style="color:var(--text)">全部一起變小</b>（偵測觸發的播放 iOS 不准網頁調音量，這是唯一有效的辦法）。百分比都是相對<b style="color:var(--text)">原始音量</b>，重複套用不會越調越小，也能調回 100%。選好後按「只調音量」才生效；剪短時也會一起套用。實際多大聲仍取決於手機與音響的音量，建議用噪音計在寶寶頭部位置量一次。</div>
+      </div>
       <div class="row" style="margin-top:10px">
         <button class="primary" id="trimBtn">✂️ 剪短並儲存</button>
+        <button id="volBtn">🔉 只調音量（不剪）</button>
         <span class="hint" id="trimStatus"></span>
       </div>
     </details>
@@ -979,6 +991,7 @@
     trimBox.style.display = "block";
     origSize.textContent = fmtSize(blob.size);
     origDur.textContent = "讀取中…";
+    paintFileVol();
     lastSrcRefresh = Date.now();
     // 大檔案是 iOS 記憶體回收的首要目標——實測 54.9MB 的 WAV 在頁面開約 10 小時後
     // 其 blob 網址被作廢，所有播放變成 NotSupportedError。提醒但不強制。
@@ -1046,6 +1059,89 @@
   player.addEventListener("loadedmetadata", () => {
     origDur.textContent = fmtDur(player.duration);
     trimStart.max = Math.max(0, Math.floor(player.duration - 1));
+    paintFileVol(); // 「只調音量」要知道長度（超過 5 分鐘的原始檔要先剪）
+  });
+
+  // —— 音檔音量（v118）——
+  // 使用者想要「按一下就讓播放音量有上限」。iOS 不讓網頁改 iPhone 的音量
+  //（HTMLMediaElement.volume 在 iPhone 上唯讀），偵測觸發的播放又沒有手勢、
+  // 啟動不了 Web Audio 的增益節點（所以「結束時音量」淡出只對手動播放有效）。
+  // 唯一對每一種播放都有效的辦法，是把音檔本身縮小。
+  // 百分比一律相對「原始音量」：目前套用了多少記在檔名裡（「｜音量 50%」），
+  // 檔名跟著檔案存在 IndexedDB，不會跟檔案脫節；所以重複套用不會越調越小，也能調回 100%。
+  const fileVol = $("fileVol"), volBtn = $("volBtn"), volNow = $("volNow");
+  function fileGainOf(name) { const m = /音量 (\d+)%/.exec(name || ""); return m ? +m[1] / 100 : 1; }
+  function volTag(pct) { return pct < 100 ? "｜音量 " + pct + "%" : ""; }
+  function dbLess(pct) { return Math.round(-20 * Math.log10(pct / 100)); }
+  function paintFileVol() {
+    const pct = Math.round(fileGainOf(currentName) * 100);
+    volNow.textContent = "目前 " + pct + "%" + (pct < 100 ? "（約小 " + dbLess(pct) + " 分貝）" : "（原始音量）");
+    if ([].some.call(fileVol.options, o => +o.value === pct)) fileVol.value = String(pct);
+    volBtn.disabled = !currentBlob;
+  }
+  // 我們自己產生的 WAV（PCM 16-bit）：直接把樣本乘上倍率。不必解碼，也不必開音訊引擎——
+  // 監聽中按下去也碰不到音訊工作階段；長度、取樣率、聲道數全部原封不動。
+  // 不是 PCM 16-bit WAV 就回傳 null，交給剪輯那條解碼路徑
+  async function scaleWav(blob, scale) {
+    const buf = await blob.arrayBuffer();
+    if (buf.byteLength < 44) return null;
+    const dv = new DataView(buf);
+    const tag = o => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+    if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
+    let o = 12, pcm16 = false, dataOff = -1, dataLen = 0;
+    while (o + 8 <= buf.byteLength) {
+      const id = tag(o), len = dv.getUint32(o + 4, true);
+      if (id === "fmt ") pcm16 = dv.getUint16(o + 8, true) === 1 && dv.getUint16(o + 22, true) === 16;
+      if (id === "data") { dataOff = o + 8; dataLen = Math.min(len, buf.byteLength - dataOff); break; }
+      o += 8 + len + (len & 1);
+    }
+    if (!pcm16 || dataOff < 0) return null;
+    const out = buf.slice(0), odv = new DataView(out);
+    for (let i = dataOff; i + 1 < dataOff + dataLen; i += 2) {
+      const v = Math.round(odv.getInt16(i, true) * scale);
+      odv.setInt16(i, v > 32767 ? 32767 : v < -32768 ? -32768 : v, true);
+    }
+    return new Blob([out], { type: "audio/wav" });
+  }
+  // 換上新音檔：已解鎖的元素一起換來源。少了這一步，元素池還指著舊音檔——
+  // 剪短音檔一直是這樣，輪到它們時由「播放前檢查」就地修正並寫一行 ⚠️；
+  // 調音量時更不能這樣：在修正之前那一刻，播的會是舊的、比較大聲的檔。
+  // 換 src 不影響解鎖狀態（refreshAudioSrc 每 2 小時就是這樣做的）
+  async function adoptAudio(blob, name) {
+    useAudio(blob, name, false);
+    elPool.concat(warmEls).forEach(el => { if (el._real && !el._inUse) el.src = player.src; });
+    await saveAudio(new File([blob], name, { type: "audio/wav" }));
+  }
+  // 備援全滅時，警報是 #player 本身在播（見 trigger）——換它的來源，正在播的音樂會當場斷掉
+  function playerBusy() {
+    if (!(alerting && alertEl === player)) return false;
+    trimStatus.textContent = "現在正用共用播放器播放，換音檔會讓音樂當場斷掉——請先按「⏹ 停止播放」再調整";
+    return true;
+  }
+  // 調整時正在播的那一顆元素不換來源（換了會當場斷掉），下一次播放才是新檔
+  function nextTimeNote() { return alerting ? "（正在播的這一次不變，下一次播放起生效）" : ""; }
+  volBtn.addEventListener("click", async () => {
+    if (!currentBlob || playerBusy()) return;
+    const pct = +fileVol.value, scale = (pct / 100) / fileGainOf(currentName);
+    if (Math.abs(scale - 1) < 0.005) { trimStatus.textContent = "音檔已經是 " + pct + "%，不用調"; return; }
+    volBtn.disabled = trimBtn.disabled = true;
+    trimStatus.textContent = "處理中…";
+    try {
+      let out = await scaleWav(currentBlob, scale);
+      if (!out) { // 不是我們產生的 WAV（例如直接選了一首 mp3）：只能解碼——太長的檔要先剪
+        if (!(player.duration <= 300)) throw new Error("這個音檔超過 5 分鐘，請改按「✂️ 剪短並儲存」（剪的時候會一起套用音量）");
+        out = await clipToWav(0, player.duration, false, scale);
+      }
+      const secs = (/（(\d+)秒/.exec(currentName) || [])[1] || Math.round(player.duration);
+      const base = currentName.replace(/（\d+秒.*?）|\.[^.]+$/g, "");
+      await adoptAudio(out, base + "（" + secs + "秒剪輯" + volTag(pct) + "）.wav");
+      logEvent("🔉 音檔音量改為 " + pct + "%" + (pct < 100 ? "（比原始音量約小 " + dbLess(pct) + " 分貝）" : "（原始音量）"));
+      trimStatus.textContent = "完成！音檔音量現在是 " + pct + "%" + nextTimeNote();
+    } catch (e) {
+      trimStatus.textContent = "調整失敗：" + (e.message || e);
+    } finally {
+      trimBtn.disabled = false; paintFileVol();
+    }
   });
 
   trimBtn.addEventListener("click", async () => {
@@ -1055,47 +1151,58 @@
     const totalDur = player.duration;
     if (!isFinite(totalDur) || totalDur <= 0) { trimStatus.textContent = "音檔長度尚未讀取完成，請稍候再試"; return; }
     if (startSec >= totalDur) { trimStatus.textContent = "起始秒數超過音檔長度"; return; }
+    if (playerBusy()) return;
 
-    trimBtn.disabled = true;
+    trimBtn.disabled = volBtn.disabled = true;
     trimStatus.textContent = "處理中…";
     try {
-      // 依時間比例估算位元組範圍，前後多留邊界，避免 VBR 誤差。
-      // WAV（例如已剪過的檔）中途截斷會破壞檔頭，一律整檔解碼——我們產出的 WAV 都夠小。
-      const bps = currentBlob.size / totalDur;
-      const isWav = /wav/i.test(currentBlob.type) || /\.wav$/i.test(currentName);
-      const margin = 3; // 秒
-      const byteStart = isWav ? 0 : Math.max(0, Math.floor((startSec - margin) * bps));
-      const byteEnd = isWav ? currentBlob.size
-        : Math.min(currentBlob.size, Math.ceil((startSec + lenSec + margin) * bps) + 65536);
-      const sliceBuf = await currentBlob.slice(byteStart, byteEnd).arrayBuffer();
-
-      const dctx = new (window.AudioContext || window.webkitAudioContext)();
-      let decoded;
-      try { decoded = await dctx.decodeAudioData(sliceBuf); }
-      finally { dctx.close(); }
-
-      // 切片起點對應的實際時間，換算出片段在解碼結果中的偏移
-      const offsetSec = Math.max(0, startSec - byteStart / bps);
-      const sr = decoded.sampleRate;
-      const from = Math.min(decoded.length, Math.floor(offsetSec * sr));
-      const frames = Math.min(decoded.length - from, Math.floor(lenSec * sr));
-      if (frames <= 0) throw new Error("剪出的片段是空的");
-
+      const pct = +fileVol.value, scale = (pct / 100) / fileGainOf(currentName);
       const mono = trimMono.checked;
-      const chs = mono ? 1 : decoded.numberOfChannels;
-      const wav = encodeWav(decoded, from, frames, mono);
-      const newName = currentName.replace(/（\d+秒.*?）|\.[^.]+$/g, "") + "（" + lenSec + "秒剪輯）.wav";
-      useAudio(wav, newName, false);
-      await saveAudio(new File([wav], newName, { type: "audio/wav" }));
-      trimStatus.textContent = "完成！目前暫存大小：" + fmtSize(wav.size) + "（" + chs + " 聲道 WAV）";
+      const { wav, chs } = await clipToWav(startSec, lenSec, mono, scale, true);
+      const newName = currentName.replace(/（\d+秒.*?）|\.[^.]+$/g, "") + "（" + lenSec + "秒剪輯" + volTag(pct) + "）.wav";
+      await adoptAudio(wav, newName);
+      if (Math.abs(scale - 1) >= 0.005) logEvent("🔉 剪短音檔並把音量改為 " + pct + "%" + (pct < 100 ? "（比原始音量約小 " + dbLess(pct) + " 分貝）" : "（原始音量）"));
+      trimStatus.textContent = "完成！目前暫存大小：" + fmtSize(wav.size) + "（" + chs + " 聲道 WAV" + (pct < 100 ? "，音量 " + pct + "%" : "") + "）" + nextTimeNote();
     } catch (e) {
       trimStatus.textContent = "剪輯失敗：" + (e.message || e) + "。可試著縮短秒數或改用較小的檔案。";
     } finally {
-      trimBtn.disabled = false;
+      trimBtn.disabled = false; paintFileVol();
     }
   });
 
-  function encodeWav(buf, from, frames, mono) {
+  // 解碼目前的音檔、取出 [startSec, startSec+lenSec)、乘上 scale，編成 WAV。
+  // 剪短與「非 WAV 的只調音量」共用
+  async function clipToWav(startSec, lenSec, mono, scale, withInfo) {
+    const totalDur = player.duration;
+    // 依時間比例估算位元組範圍，前後多留邊界，避免 VBR 誤差。
+    // WAV（例如已剪過的檔）中途截斷會破壞檔頭，一律整檔解碼——我們產出的 WAV 都夠小。
+    const bps = currentBlob.size / totalDur;
+    const isWav = /wav/i.test(currentBlob.type) || /\.wav$/i.test(currentName);
+    const margin = 3; // 秒
+    const byteStart = isWav ? 0 : Math.max(0, Math.floor((startSec - margin) * bps));
+    const byteEnd = isWav ? currentBlob.size
+      : Math.min(currentBlob.size, Math.ceil((startSec + lenSec + margin) * bps) + 65536);
+    const sliceBuf = await currentBlob.slice(byteStart, byteEnd).arrayBuffer();
+
+    const dctx = new (window.AudioContext || window.webkitAudioContext)();
+    let decoded;
+    try { decoded = await dctx.decodeAudioData(sliceBuf); }
+    finally { dctx.close(); }
+
+    // 切片起點對應的實際時間，換算出片段在解碼結果中的偏移
+    const offsetSec = Math.max(0, startSec - byteStart / bps);
+    const sr = decoded.sampleRate;
+    const from = Math.min(decoded.length, Math.floor(offsetSec * sr));
+    const frames = Math.min(decoded.length - from, Math.floor(lenSec * sr));
+    if (frames <= 0) throw new Error("剪出的片段是空的");
+
+    const chs = mono ? 1 : decoded.numberOfChannels;
+    const wav = encodeWav(decoded, from, frames, mono, scale);
+    return withInfo ? { wav, chs } : wav;
+  }
+
+  function encodeWav(buf, from, frames, mono, gain) {
+    const g = gain || 1;
     const chs = mono ? 1 : buf.numberOfChannels;
     const sr = buf.sampleRate;
     const data = new DataView(new ArrayBuffer(44 + frames * chs * 2));
@@ -1113,7 +1220,7 @@
         let v;
         if (mono) { v = 0; for (let s = 0; s < srcChs.length; s++) v += srcChs[s][from + i]; v /= srcChs.length; }
         else v = srcChs[c][from + i];
-        v = Math.max(-1, Math.min(1, v));
+        v = Math.max(-1, Math.min(1, v * g));
         data.setInt16(o, v < 0 ? v * 0x8000 : v * 0x7fff, true); o += 2;
       }
     }
