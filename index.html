@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v118</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v119</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -729,7 +729,11 @@
   // 紀錄每次頁面載入：連續重載會拖垮啟動（麥克風還沒釋放），
   // 有這行才數得出「40 秒內載入了幾次」，不必再從別的線索反推
   const APP_VER = $("verTag").textContent.trim(); // 版本號只寫在畫面上那一處，其他都引用它
-  logEvent("📄 頁面載入（" + APP_VER + "）");
+  // v119：連 Safari 版本一起記。10/10 早上「播完音樂拿不回麥克風」在 09/21～10/07 的
+  // 八份紀錄（約 550 次重建）裡一次都沒有，那一早卻連三次——兩次之間若更新過系統，
+  // 這是第一個要排除的變因，而它原本完全不在紀錄裡
+  const safariVer = (/Version\/([\d.]+)/.exec(navigator.userAgent) || [])[1];
+  logEvent("📄 頁面載入（" + APP_VER + (safariVer ? "｜Safari " + safariVer : "") + "）");
 
   // 檢查有沒有新版：GitHub Pages 的 HTML 快取 10 分鐘、iOS Safari 又特別頑固，
   // 常常改好了卻還在看舊版。這裡主動比對版本號，有新版就顯示橫幅——
@@ -1865,13 +1869,43 @@
   // 麥克風請求一律設時限：被殘留的錄音工作階段卡住時，getUserMedia 會永遠不回來
   //（本專案鐵律：任何 await 都要有時限——AudioContext.resume() 已經咬過一次）。
   // 遲到的串流要主動關掉，否則又是一個沒人管的工作階段
+  // v119：逾時只是「我們不等了」，請求本身還掛在 iOS 那邊。卡住的那一段會累積幾十個
+  // 這樣的請求（10/10 早上 08:12→09:40 重試了 92 次）——它們最後是一起回來、一個一個回來、
+  // 還是永遠不回來，以前完全看不到。三個數字記下來，下一次就分得出來：
+  // 還掛著幾個、後來回來了幾個（成功／失敗、等了多久）
+  let micReqPending = 0, micLateOK = 0, micLateErr = 0, micLateErrName = "", micLateMaxMs = 0;
   function micWithTimeout(ms) {
+    const sentAt = Date.now();
     const req = navigator.mediaDevices.getUserMedia(micConstraints());
     let late = false;
+    micReqPending++;
+    const settled = () => { micReqPending--; };
+    req.then(settled, settled);
+    const lateAt = () => { micLateMaxMs = Math.max(micLateMaxMs, Date.now() - sentAt); };
     return Promise.race([
-      req.then(s => { if (late) { try { s.getTracks().forEach(t => t.stop()); } catch (e) {} throw new Error("麥克風逾時"); } return s; }),
+      req.then(s => { if (late) { micLateOK++; lateAt(); try { s.getTracks().forEach(t => t.stop()); } catch (e) {} throw new Error("麥克風逾時"); } return s; },
+               e => { if (late) { micLateErr++; micLateErrName = (e && e.name) || "未知"; lateAt(); } throw e; }),
       new Promise((_, rej) => setTimeout(() => { late = true; rej(new Error("麥克風逾時")); }, ms || 10000))
     ]);
+  }
+  // 拿不到麥克風的當下，系統是什麼狀態。兩個假設要分開：
+  // ① 別的東西把音訊搶走了（來電、別的 App、Siri）——音訊引擎或工作階段會是 interrupted，
+  //    或頁面沒有焦點（來電畫面、控制中心蓋在上面）
+  // ② iOS 自己卡住——引擎正常、頁面有焦點，只是請求一個一個掛著不回來
+  function micStateTag() {
+    const parts = [];
+    if (audioCtx) parts.push("引擎 " + audioCtx.state);
+    const as = navigator.audioSession;
+    if (as && as.state) parts.push("工作階段 " + as.state + (as.type && as.type !== "auto" ? "/" + as.type : ""));
+    if (document.hasFocus && !document.hasFocus()) parts.push("頁面沒有焦點");
+    parts.push("未回應請求 " + micReqPending);
+    if (micLateOK || micLateErr) {
+      const secs = Math.round(micLateMaxMs / 1000);
+      parts.push("累計逾時後才回應 " + (micLateOK + micLateErr) + " 個（成功 " + micLateOK
+        + (micLateErr ? "、失敗 " + micLateErr + "〔" + micLateErrName + "〕" : "")
+        + "，最久 " + (secs < 120 ? secs + " 秒" : fmtDry(micLateMaxMs)) + "）");
+    }
+    return "｜" + parts.join("、");
   }
 
   // 深度音訊重置：不重載頁面（重載會丟失使用者手勢的播放授權，之後的播放
@@ -1920,7 +1954,7 @@
       if (running && !alerting) setStatus("listening", "監聽中…", "已回到偵測狀態");
     } catch (e) {
       if (micBgFail(e, "音訊重建")) { resetting = false; return; }
-      logEvent("⚠️ 音訊重建失敗：" + (e.message || e));
+      logEvent("⚠️ 音訊重建失敗：" + (e.message || e) + micStateTag());
       setStatus("alert", "麥克風恢復失敗", "請按「停止」後重新開始監聽");
     }
     resetting = false;
@@ -2039,7 +2073,7 @@
       // 這一行必須自成一支、帶 ⚠️、講出真實長度。
       if (micFailN) {
         logEvent("⚠️ 麥克風已接回（先前連續 " + micFailN + " 次重連失敗，共 "
-          + fmtDry(Date.now() - micDeafSince) + "拿不到麥克風）——這段時間聽不見寶寶");
+          + fmtDry(Date.now() - micDeafSince) + "拿不到麥克風）——這段時間聽不見寶寶" + micStateTag());
         if (running && !alerting) setStatus("listening", "監聽中…", "麥克風已接回");
       }
       else if (routine) routineMicOff = offSecs;
@@ -2075,7 +2109,7 @@
         // 而每一行都要帶「已經多久沒在聽」，那才是使用者真正需要的數字。
         if (micFailN <= 3 || micFailN % 10 === 0) {
           logEvent("⚠️ 麥克風中斷且無法自動恢復（第 " + micFailN + " 次，已 " + deaf + "沒有在聽"
-            + (wait ? "，改為每 " + Math.round(wait / 1000) + " 秒重試一次，讓保連脈衝有空檔送出" : "") + "）");
+            + (wait ? "，改為每 " + Math.round(wait / 1000) + " 秒重試一次，讓保連脈衝有空檔送出" : "") + "）" + micStateTag());
         }
       }
     }
@@ -2589,7 +2623,10 @@
         lastPulseVis = vis;
         if (notable) logEvent("保連脈衝 #" + pulseN + " 已送出（" + (vis ? "前景" : "背景")
           + (rider ? "，順帶熱身#" + rider._id : "") + "，等待 " + wait + "ms"
-          + (routineMicOff ? "，麥克風例行離線約 " + routineMicOff + " 秒" : "")
+          // 麥克風正拿不回來時，「例行離線約 6 秒」是上一次成功時留下的舊數字——
+          // 10/10 08:20 那一行這樣寫，實際上已經 8 分鐘沒在聽
+          + (micFailN ? "，麥克風仍拿不回來（已 " + fmtDry(Date.now() - micDeafSince) + "）"
+             : routineMicOff ? "，麥克風例行離線約 " + routineMicOff + " 秒" : "")
           + "，距上次音樂 " + drySpell() + "）");
       }).catch(err => {
         pulseFails++;
@@ -2869,6 +2906,18 @@
   // 手動按播放器的暫停也視為解除警報（stopAlert 自己觸發的 pause 進不來：alerting 已為 false）
   player.addEventListener("pause", () => alertPaused(player));
 
+  // v119：觸發那一刻，麥克風那邊有沒有東西還掛著。10/10 11:09 從手機播出的那一次，
+  // 前面剛經歷兩段「拿不回麥克風」；若當時還有請求掛在 iOS 那邊，
+  // 「錄音中 → 輸出留在手機」這條鐵律就可能在我們放掉麥克風之後依然成立。
+  // 只在不正常時才寫，平常這一行一個字都不會多
+  function trigAudioTag() {
+    const parts = [];
+    if (micReqPending) parts.push("麥克風還有 " + micReqPending + " 個請求沒回應");
+    if (audioCtx && audioCtx.state === "interrupted") parts.push("音訊引擎被系統中斷");
+    const as = navigator.audioSession;
+    if (as && as.state === "interrupted") parts.push("音訊工作階段被系統中斷");
+    return parts.length ? "｜⚠️ " + parts.join("、") : "";
+  }
   // minsOverride：手動播放時由選單當場指定；偵測觸發則沿用「觸發後播放時長」設定
   function trigger(reason, minsOverride) {
     if (alerting) return;
@@ -2954,7 +3003,7 @@
         + (el === player ? "，共用播放器"
            : el._origin === "熱身" ? "，熱身元素#" + el._id
            : "，新元素#" + el._id + "，池餘 " + elPool.length)
-        + "，距上次音樂 " + dryBefore + eviD + "）");
+        + "，距上次音樂 " + dryBefore + eviD + "）" + trigAudioTag());
       if (mins !== "once") {
         el.loop = true;
         alertTimer = setTimeout(stopAlert, +mins * 60000);

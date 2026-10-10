@@ -11,9 +11,9 @@ const fakeMic = () => {
     return d.stream;
   };
 };
-async function openPage(url, initScripts = [fakeMic]) {
+async function openPage(url, initScripts = [fakeMic], ctxOpts = {}) {
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext(ctxOpts);
   for (const s of initScripts) await ctx.addInitScript(s);
   const errors = []; const page = await ctx.newPage();
   page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));

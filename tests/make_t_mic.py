@@ -13,6 +13,7 @@ subs = [
      '  window.__recovering = () => recovering;\n'
      '  window.__pulseN = () => pulseN;\n'
      '  window.__killMic = () => { if (stream) stream.getTracks().forEach(t => t.stop()); };\n'
+     '  window.__trigger = (r, m) => trigger(r, m);\n'
      + anchor),
 ]
 for a, b in subs:
