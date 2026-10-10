@@ -14,7 +14,7 @@ SRC="${1:-$ROOT/index.html}"; ONLY="${2:-}"
 export NODE_PATH="${NODE_PATH:-$(npm root -g)/playwright/node_modules}"
 curl -s -o /dev/null http://127.0.0.1:8123/ || { (cd "$ROOT" && setsid nohup python3 -m http.server 8123 >/dev/null 2>&1 < /dev/null &); sleep 2; }
 # 探針 → 它用的測試副本
-PROBES="pulsephase:ps pulsesmoke:ps keephealth:ps srcerror:sr watchbase:dy dry:dy micstorm:mc michang:mc
+PROBES="pulsephase:ps pulsesmoke:ps keephealth:ps srcerror:sr watchbase:dy dry:dy micstorm:mc michang:mc perm:mc
 pool:pl sameretry:pl verdict:pl gesture:pl filevol:pl freshtag:fr route:rt logtier:lg clip:dg capdata:dg retain:rn"
 declare -A GEN=([ps]=pulse [sr]=src [dy]=dry [mc]=mic [pl]=pool [fr]=fresh [rt]=route [lg]=log [dg]=diag [rn]=retain)
 for k in "${!GEN[@]}"; do python3 "$HERE/make_t_${GEN[$k]}.py" "$SRC" "__$k.html" >/dev/null || { echo "產生 __$k.html 失敗"; exit 2; }; done

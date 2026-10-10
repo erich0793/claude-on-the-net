@@ -14,6 +14,9 @@ const fakeMic = () => {
 async function openPage(url, initScripts = [fakeMic], ctxOpts = {}) {
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
   const ctx = await browser.newContext(ctxOpts);
+  // v120 起頁面會讀麥克風權限，「詢問」時掛紅框、寫一行 ⚠️。測試環境比照正確的設定（允許），
+  // 不然每支探針一開頭都多一塊提示和一行警告；要測權限的探針自己換掉 navigator.permissions
+  await ctx.grantPermissions(['microphone']);
   for (const s of initScripts) await ctx.addInitScript(s);
   const errors = []; const page = await ctx.newPage();
   page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));

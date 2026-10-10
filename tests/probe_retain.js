@@ -6,7 +6,8 @@ const PAGE = process.env.PAGE || 'http://127.0.0.1:8123/__rn.html';
 const IS_CTRL = /115/.test(PAGE);
 (async () => {
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
-  const page = await browser.newPage(); const errors = [];
+  const ctx = await browser.newContext(); await ctx.grantPermissions(['microphone']);
+  const page = await ctx.newPage(); const errors = [];
   page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
   await page.goto(PAGE); await page.waitForTimeout(1500);
   await page.evaluate(() => {

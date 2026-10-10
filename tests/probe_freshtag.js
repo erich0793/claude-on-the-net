@@ -39,7 +39,7 @@ const pick = (t, re) => (t.split(/(?=\d\d\/\d\d \d\d:\d\d:\d\d)/).find(l => re.t
 
 (async () => {
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
-  const ctx = await browser.newContext(); await ctx.addInitScript(prep);
+  const ctx = await browser.newContext(); await ctx.grantPermissions(['microphone']); await ctx.addInitScript(prep);
   const errors = []; const page = await ctx.newPage();
   page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
   await page.goto(PAGE); await page.waitForTimeout(1500);

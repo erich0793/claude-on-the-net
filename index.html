@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v119</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v120</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -194,6 +194,7 @@
       <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
     </div>
     <div id="routeWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--danger); background:var(--panel-2); line-height:1.5"></div>
+    <div id="permWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--danger); background:var(--panel-2); line-height:1.5; cursor:pointer"></div>
     <div id="poolWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--warn); background:var(--panel-2); line-height:1.5"></div>
     <div class="row">
       <button class="primary" id="startBtn" style="font-size:16px; padding:14px 20px">🎙️ 開啟麥克風並開始監聽</button>
@@ -1869,12 +1870,67 @@
   // 麥克風請求一律設時限：被殘留的錄音工作階段卡住時，getUserMedia 會永遠不回來
   //（本專案鐵律：任何 await 都要有時限——AudioContext.resume() 已經咬過一次）。
   // 遲到的串流要主動關掉，否則又是一個沒人管的工作階段
+  // —— 麥克風權限（v120）——
+  // 10/10 早上那三段「拿不回麥克風」，使用者自己找到了線索：網站設定的麥克風是「詢問」。
+  // 「詢問」時 Safari 只會暫時記住你按過的「允許」；記憶一過期，播完音樂要重新拿麥克風，
+  // iPhone 就跳出視窗等人按——getUserMedia 不失敗也不回應，正是「一直卡著」。
+  // 08:12 卡到 09:40、09:44 卡到 09:52，兩次都是突然接回，就像有人走過去按了「允許」。
+  // 使用說明的檢查清單早就寫著「麥克風 → 允許（必要！）」，但那只是一行字：
+  // 設定是「詢問」時畫面上什麼都沒有，深夜也沒有人會去按那個視窗。
+  // 這是只有使用者修得好的事（五之三之七），所以要掛在畫面上，而不是只寫進紀錄。
+  // 讀不到（不支援這個 API）就什麼都不顯示——寧可沉默，也不要每天誤報
+  let micPerm = "", permStatus = null, permAskSeen = false, permDismissed = false;
+  const PERM_HINT = "iPhone 可能正跳出視窗詢問麥克風：請按「允許」，並把網站設定的麥克風改成「允許」";
+  const permZh = st => st === "granted" ? "允許" : st === "prompt" ? "詢問" : st === "denied" ? "拒絕" : st;
+  async function readMicPerm(why) {
+    let st = "";
+    try {
+      const ps = await navigator.permissions.query({ name: "microphone" });
+      st = ps.state;
+      if (!permStatus) { permStatus = ps; ps.onchange = () => notePerm(ps.state, "狀態改變"); }
+    } catch (e) { /* 不支援 */ }
+    notePerm(st, why);
+    return st;
+  }
+  // 只在「變了」的時候寫一行：每次要麥克風都會讀一次（保連脈衝每 4 分鐘一次），不能每次都寫
+  function notePerm(st, why) {
+    if (st && st !== micPerm) {
+      const was = micPerm;
+      micPerm = st;
+      if (st !== "granted") { if (st === "prompt") permAskSeen = true; permDismissed = false; }
+      logEvent((st === "granted" ? "🔧 " : "⚠️ ") + "麥克風權限：" + permZh(st)
+        + "（" + (was ? "原本是" + permZh(was) + "，" : "") + why + "）"
+        + (st === "prompt" ? "——播完音樂要重新拿麥克風時，iPhone 會跳出視窗等人按「允許」，沒人按就一直聽不見。請把網站設定的麥克風改成「允許」"
+           : st === "denied" ? "——網頁拿不到麥克風。請把網站設定的麥克風改成「允許」"
+           : permAskSeen ? "——若只是按了跳出視窗裡的「允許」，這是暫時的，網站設定仍是「詢問」" : ""));
+    }
+    paintPerm();
+  }
+  // 讀到「允許」不代表設定改好了：「詢問」的網站按過視窗裡的允許之後，也會暫時讀成允許。
+  // 所以這一頁只要看過一次「詢問」，提示就留著，直到有人碰它（或重新整理後讀到真的允許）
+  function paintPerm() {
+    const el = $("permWarn");
+    if (!el) return;
+    const bad = micPerm === "denied" || micPerm === "prompt" || permAskSeen;
+    if (!bad || permDismissed) { el.hidden = true; return; }
+    el.hidden = false;
+    el.innerHTML = "🎙️ <b>這個網站的麥克風權限是「" + (micPerm === "denied" ? "拒絕" : "詢問") + "」——請改成「允許」</b>"
+      + "<span class='hint' style='display:block'>"
+      + (micPerm === "denied" ? "網頁拿不到麥克風，聽不見寶寶。"
+         : "每次音樂播完，網頁都要重新拿一次麥克風。設定是「詢問」時，iPhone 隨時可能跳出視窗等人按「允許」，"
+           + "沒人按就一直聽不見（10/10 早上就這樣斷了兩段，共 96 分鐘）。"
+           + (micPerm === "granted" ? "剛才按的「允許」只是暫時的。" : ""))
+      + "改法：Safari 網址列的「大小」（aA）→ 網站設定 → 麥克風 → <b>允許</b>。改好之後碰一下這則提示，它就會消失。</span>";
+  }
+  $("permWarn").addEventListener("click", () => { permDismissed = true; paintPerm(); });
+
   // v119：逾時只是「我們不等了」，請求本身還掛在 iOS 那邊。卡住的那一段會累積幾十個
   // 這樣的請求（10/10 早上 08:12→09:40 重試了 92 次）——它們最後是一起回來、一個一個回來、
   // 還是永遠不回來，以前完全看不到。三個數字記下來，下一次就分得出來：
   // 還掛著幾個、後來回來了幾個（成功／失敗、等了多久）
   let micReqPending = 0, micLateOK = 0, micLateErr = 0, micLateErrName = "", micLateMaxMs = 0;
   function micWithTimeout(ms) {
+    readMicPerm("要麥克風時"); // 不等它：逾時那一刻 micPerm 已經是這次請求當下的狀態
     const sentAt = Date.now();
     const req = navigator.mediaDevices.getUserMedia(micConstraints());
     let late = false;
@@ -1898,6 +1954,7 @@
     const as = navigator.audioSession;
     if (as && as.state) parts.push("工作階段 " + as.state + (as.type && as.type !== "auto" ? "/" + as.type : ""));
     if (document.hasFocus && !document.hasFocus()) parts.push("頁面沒有焦點");
+    if (micPerm) parts.push("權限 " + permZh(micPerm));
     parts.push("未回應請求 " + micReqPending);
     if (micLateOK || micLateErr) {
       const secs = Math.round(micLateMaxMs / 1000);
@@ -1907,6 +1964,7 @@
     }
     return "｜" + parts.join("、");
   }
+  readMicPerm("頁面載入");
 
   // 深度音訊重置：不重載頁面（重載會丟失使用者手勢的播放授權，之後的播放
   // 會被 iOS 丟進通話級的劣化管線），改為徹底關閉本頁所有音訊資源數秒，
@@ -1955,7 +2013,7 @@
     } catch (e) {
       if (micBgFail(e, "音訊重建")) { resetting = false; return; }
       logEvent("⚠️ 音訊重建失敗：" + (e.message || e) + micStateTag());
-      setStatus("alert", "麥克風恢復失敗", "請按「停止」後重新開始監聽");
+      setStatus("alert", "麥克風恢復失敗", micPerm === "prompt" ? PERM_HINT : "請按「停止」後重新開始監聽");
     }
     resetting = false;
   }
@@ -2037,7 +2095,9 @@
     const t0 = stream && stream.getAudioTracks()[0];
     if (t0 && t0.readyState === "live") return; // 麥克風還活著就不用重連
     recovering = true;
-    if (!silent) setStatus("alert", "麥克風被系統中斷，重新連接中…", "");
+    // 權限是「詢問」時，每一次重試都可能正掛著那個視窗——重試期間也要留著「去按允許」，
+    // 不然 60 秒裡有 10 秒畫面是空白的說明（v120 探針第一版就是在這 10 秒裡讀到空字串）
+    if (!silent) setStatus("alert", "麥克風被系統中斷，重新連接中…", micPerm === "prompt" ? PERM_HINT : "");
     try {
       if (micBlockedByBg("麥克風重連")) { recovering = false; return; } // 見 micBlockedByBg
       if (!builtinMicId) await findBuiltinMic(); // 首次未鎖定成功時再試一次
@@ -2102,8 +2162,8 @@
         // 麥克風救不回來是一回事，把音響一起賠掉是另一回事——退避讓音響保得住。
         const wait = micFailN <= 3 ? 0 : micFailN <= 10 ? 30000 : 60000;
         nextMicTry = Date.now() + wait;
-        setStatus("alert", "麥克風中斷，已 " + deaf + "沒有在聽",
-          "系統仍在自動重試；若遲遲沒恢復，按「停止」再重新開始監聽最快");
+        setStatus("alert", "麥克風中斷，已 " + deaf + "沒有在聽", micPerm === "prompt" ? PERM_HINT
+          : "系統仍在自動重試；若遲遲沒恢復，按「停止」再重新開始監聽最快");
         // 同一句話寫 490 行是這個專案第四次踩到的洗版（v89／v93／v95 各一次）。
         // 門檻是判斷、判斷會錯；節流是結構、不會錯。前三次照記，之後每 10 次一行——
         // 而每一行都要帶「已經多久沒在聽」，那才是使用者真正需要的數字。

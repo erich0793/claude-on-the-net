@@ -28,7 +28,7 @@ const log = p => p.evaluate(() => document.getElementById('logBox').innerText);
 
 (async () => {
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
-  const ctx = await browser.newContext(); await ctx.addInitScript(prep);
+  const ctx = await browser.newContext(); await ctx.grantPermissions(['microphone']); await ctx.addInitScript(prep);
   const errors = []; const page = await ctx.newPage();
   page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
   await page.goto(PAGE); await page.waitForTimeout(1500);
