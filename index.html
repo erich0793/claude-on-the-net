@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v120</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v121</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -841,6 +841,8 @@
   let running = false, alerting = false;
   // 手動播放結束時頁面在背景，自動接手被延到回前景才做（見 visibilitychange）
   let pendingAutoStart = false;
+  // v121：開始監聽讓位給播放——等麥克風的那一兩秒裡有播放開始了，這一輪播完再開始（見 start()）
+  let startAfterAlert = false;
   // 最近一次使用者手勢的時刻。播放被 pause 掉時要靠它分辨是「使用者按的」還是
   // 「系統中斷的（音訊路由改變、藍牙斷線）」——08/22 20:55 那次寫成「手動停止播放」，
   // 但連使用者自己都不確定是不是他按的，等於把最關鍵的一條線索寫死了
@@ -1690,6 +1692,22 @@
   // 在部分 iOS 版本會漏出一瞬音樂，已移除。
 
   let starting = false; // 啟動中：擋掉「沒反應再按一次」造成的並行麥克風請求
+  // v121：播放的時候絕不能開著麥克風——iOS 會把聲音留在手機喇叭（鐵律 1）。
+  // trigger() 會先關麥克風再播，但它關的是「那一刻的」stream；如果 start() 正在等麥克風，
+  // 那時 stream 還是空的，它什麼都沒關到，一兩秒後麥克風回來，就在播放中開著。
+  // 10/21 21:58:37 按停止 → 自動開始偵測（等麥克風）→ 21:58:39 又按手動播放 →
+  // 同一秒麥克風才回來、開始監聽——那一輪的音樂幾乎一定是從手機出來的。
+  // 讓位：放掉（或根本不去拿）麥克風，這一輪播完再開始監聽（stopAlert 的「未在監聽中」那一支接手）
+  function yieldStartToPlayback(gotMic) {
+    if (gotMic && stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} }
+    if (gotMic) stream = null;
+    starting = false;
+    startAfterAlert = true;
+    startBtn.disabled = false;
+    logEvent("🔧 開始監聽讓位給剛開始的播放" + (gotMic ? "（麥克風已放掉）" : "")
+      + "——播放時開著麥克風，iOS 會把聲音留在手機喇叭；這一輪播完就自動開始監聽");
+    setStatus("alert", "播放中…", "播完就會自動開始監聽（播放時不開麥克風，聲音才會從喇叭出來）");
+  }
   // ev：只有開始按鈕的 click 會帶著事件進來；計時器、回到前景、重載後自動恢復都是 start()。
   async function start(ev) {
     if (starting || running) return;
@@ -1725,6 +1743,7 @@
       // 先收拾舊的錄音工作階段：變數一旦被覆寫，舊串流就再也沒人 stop()，
       // 會變成孤兒工作階段死抓著麥克風，讓之後每一次請求都永遠不回來
       if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} stream = null; }
+      if (alerting) { yieldStartToPlayback(false); return; } // 正在播：先別碰麥克風（見 yieldStartToPlayback）
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
       stream = await micWithTimeout();
       // 取得權限後才能讀裝置清單：找出內建麥克風並固定使用；
@@ -1756,6 +1775,7 @@
       starting = false;
       return;
     }
+    if (alerting) { yieldStartToPlayback(true); return; }
     starting = false;
     // 麥克風一律用自己的（可重用的）AudioContext。播放預設走純播放器輸出——
     // 在錄音模式下建立的 Web Audio 引擎，其輸出會被 iOS 釘在手機喇叭，
@@ -2287,6 +2307,7 @@
   function stop() {
     const hungEl = curEl();   // 需在 stopAlert 清空 alertEl 前捕捉，卡死保險才盯得到正確元素
     running = false;          // 先標記停止，避免 stopAlert 觸發的麥克風重連又把麥克風打開
+    startAfterAlert = false;  // 按了停止：剛才讓位的開始監聽也一併取消
     paintPool();              // 沒在監聽就不該掛著「池要見底了」的警示
     // 失聰的計數與退避以「本次監聽」為範圍（v105 的同一課：跨監聽段的舊值會亂算）
     micFailN = 0; micDeafSince = 0; nextMicTry = 0;
@@ -2934,12 +2955,14 @@
       logEvent("播放結束（未在監聽中）");
       // 未監聽時播完要把狀態列收回來，否則會一直停在「播放中…」，
       // 讓人以為還在播（手動播放結束後最常看到這一幕）
-      if (lastAlertManual && autoWatchCk.checked) {
+      const deferred = startAfterAlert; startAfterAlert = false; // v121：剛才讓位的開始監聽
+      const autoWatch = lastAlertManual && autoWatchCk.checked;
+      if (autoWatch || deferred) {
         // 哄睡音樂播完（或被按停）就自動接手站崗。元素池在按下手動播放時已於
         // 手勢內補滿（v117 起連手動播放用掉的那一顆也一起補），麥克風權限也已是「允許」，
         // 所以這裡不需要新的手勢——**也絕不能在這裡補元素**（見 start() 的註解）；
         // 萬一 iOS 仍拒絕，start() 內建的逾時會把按鈕交還給使用者
-        logEvent("手動播放結束，依設定自動開始偵測"
+        logEvent((autoWatch ? "手動播放結束，依設定自動開始偵測" : "播放結束，接續剛才讓位的開始監聽")
           + (keepCk.checked && !keeperGestureOK ? "──⚠️ 保連音軌尚未解鎖，請碰一下畫面" : ""));
         setStatus("", "播放結束", "依設定自動開始偵測…");
         // iOS 不讓背景頁面取得麥克風——getUserMedia 不會失敗，它會直接掛著；
@@ -3040,8 +3063,14 @@
       // 08/31 19:27 那次無聲，既有的看門狗（paused 或 currentTime<0.3）沒有叫，
       // 代表元素確實在前進：換句話說，病因只可能在「播錯東西」或「被消音」這一類，
       // 而當時的紀錄完全沒有這些欄位可查。這一行只在不對勁時才寫，正常時零成本。
+      // v121：剛在這次手勢裡生出來、靜音解鎖還沒跑完的元素，本來就是靜音的——靜音就是解鎖的做法，
+      // 不是異常。打開網頁後第一下就按手動播放時，池裡全是這種元素（解鎖要等 play() 回來），
+      // 於是 09/19 起每一次都寫一行 ⚠️（13 次，全部是「元素#4 解鎖✗ 齡0分 rs=0｜元素是靜音狀態」），
+      // 而每一次都正常出聲。照樣就地解除靜音，只是不再當成異常；其他任何組合照舊示警
+      const midUnlock = el !== player && el._born && !el._unlockOK && !el._unlockErr && Date.now() - el._born < 10000;
+      const onlyMuted = el.muted && !(el.volume < 1) && el.src === player.src;
       if (el !== player && (el.muted || el.volume < 1 || el.src !== player.src)) {
-        logEvent("⚠️ 播放前檢查異常（" + elTag(el)
+        if (!(midUnlock && onlyMuted)) logEvent("⚠️ 播放前檢查異常（" + elTag(el)
           + (el.src !== player.src ? "｜播的不是選定的音檔" : "")
           + (el.muted ? "｜元素是靜音狀態" : "")
           + (el.volume < 1 ? "｜音量只有 " + Math.round(el.volume * 100) + "%" : "")
@@ -3305,6 +3334,7 @@
   // 背景心跳狀態：診斷行受「夠大聲」把關，安靜時根本不輸出，無法用來驗證
   // 背景偵測是否還活著（這正是先前誤判的來源）
   let bgT0 = 0, bgFrames = 0, bgPeak = -120;
+  let bgWarnN = 0, bgWarnSince = 0, bgWarnLevel = ""; // v121：背景示警的連續次數（節流用）
   // 連續幾個「有聲音卻基頻＋頻譜全滅」的診斷視窗就示警。一個視窗 10 秒，
   // 6 個＝約 1 分鐘——短暫的低頻干擾不必吵，持續一分鐘就真的該講了
   const DEAF_RUNS = 6;
@@ -3501,7 +3531,7 @@
     // 隱藏頁面的計時器夾到 1Hz——那是預期行為不是故障。實測 08/22 19:42–19:50 一次
     // 十分鐘的背景手動播放就寫了 9 行「請讓網頁保持在前景」，建議在那個當下還是錯的。
     // 警報結束後視窗重新開始計數，真正監聽中的背景心跳與示警完全不受影響
-    if (document.visibilityState === "visible" || alerting) { bgT0 = 0; }
+    if (document.visibilityState === "visible" || alerting) { bgT0 = 0; bgWarnN = 0; bgWarnLevel = ""; }
     else {
       if (!bgT0) { bgT0 = now; bgFrames = 0; bgPeak = -120; }
       bgFrames++;
@@ -3510,10 +3540,23 @@
         // 幀數才是真相：實測有過「2 小時只跑 49 幀」（約每 2.5 分鐘一幀）的情況，
         // 那等於偵測停擺。只寫「運作中」會讓人誤以為一切正常，必須分級示警
         const secs = (now - bgT0) / 1000, fpm = bgFrames / (secs / 60);
-        const level = fpm < 60 ? "⚠️ 背景偵測幾乎停擺" : fpm < 400 ? "⚠️ 背景偵測被降頻" : "背景偵測運作中";
-        logEvent(level + "（" + Math.round(secs) + " 秒 " + bgFrames + " 幀＝每分鐘 " + Math.round(fpm) + " 幀，"
-          + (micLive ? "峰值 " + bgPeak.toFixed(0) + "dB" : "麥克風離線中") + "）"
-          + (fpm < 400 ? "──正常約 900，請讓網頁保持在前景" : ""));
+        // v121：iOS 把背景頁面的計時器夾在 1Hz，每分鐘 60 幀就是背景的「正常值」。
+        // 門檻原本也是 60，於是 59.x／60.x 幀就在「幾乎停擺」和「被降頻」之間來回跳
+        //（10/13 那段兩種說法交錯出現，實際上一模一樣）。「幾乎停擺」留給真的停了：不到一半
+        const level = fpm < 30 ? "⚠️ 背景偵測幾乎停擺" : fpm < 400 ? "⚠️ 背景偵測被降頻" : "背景偵測運作中";
+        const warn = level !== "背景偵測運作中";
+        if (warn && !bgWarnN) bgWarnSince = bgT0;
+        bgWarnN = warn ? bgWarnN + 1 : 0;
+        // 同一句 ⚠️ 每分鐘一行：10/13 01:55→03:44 在背景 110 分鐘就寫了 108 行，佔掉整份紀錄的 14%，
+        // 而 ⚠️ 是最後才裁的一層——又是「被保護的噪音」（v108 的同一課：門檻是判斷、節流是結構）。
+        // 第一分鐘照寫；之後只在「等級變了」或每 10 分鐘寫一行，並說出已經在背景多久
+        if (!warn || bgWarnN === 1 || level !== bgWarnLevel || bgWarnN % 10 === 0) {
+          logEvent(level + "（" + Math.round(secs) + " 秒 " + bgFrames + " 幀＝每分鐘 " + Math.round(fpm) + " 幀，"
+            + (micLive ? "峰值 " + bgPeak.toFixed(0) + "dB" : "麥克風離線中")
+            + (bgWarnN > 1 ? "，已連續在背景 " + fmtDry(now - bgWarnSince) : "") + "）"
+            + (warn ? "──正常約 900，請讓網頁保持在前景" : ""));
+        }
+        if (warn) bgWarnLevel = level;
         bgT0 = now; bgFrames = 0; bgPeak = -120;
       }
     }

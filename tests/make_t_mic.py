@@ -14,6 +14,10 @@ subs = [
      '  window.__pulseN = () => pulseN;\n'
      '  window.__killMic = () => { if (stream) stream.getTracks().forEach(t => t.stop()); };\n'
      '  window.__trigger = (r, m) => trigger(r, m);\n'
+     '  window.__alerting = () => alerting;\n'
+     '  window.__running = () => running;\n'
+     '  window.__curEl = () => curEl();\n'
+     '  window.__pool = () => elPool.slice();\n'
      + anchor),
 ]
 for a, b in subs:
