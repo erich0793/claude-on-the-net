@@ -4,6 +4,9 @@
 // ① 自動開始偵測正在等麥克風時按手動播放：麥克風回來的那一刻要放掉；播完才開始監聽
 // ② 沒在監聽、手動播放中按「開始監聽」：播放期間根本不去要麥克風；播完自動開始監聽
 // ③ 沒撞在一起（已在監聽、再手動播放）：照舊——播放時麥克風放掉
+// v122 加嚴 ①：v121 是「麥克風一回來就放掉」，但 10/27 16:29:51 那次音樂先開始、麥克風 1 秒多後才回來，
+//   中間那一下仍是在播放中開了麥克風（0.2 秒取樣抓不到）。現在量時間點：音樂的 play()
+//   要在麥克風回來並放掉之後、再隔 0.7 秒以上；而且觸發那一行不可以把「正在路上」的請求標成 ⚠️
 const { openPage, loadTone, log, since, pick } = require('./_common');
 const PAGE = process.env.PAGE || 'http://127.0.0.1:8123/__mc.html';
 // 麥克風要等多久才回來可以調；記下每一條拿到的串流，才量得出「播放時有沒有開著」
@@ -16,6 +19,17 @@ const mic = () => {
   navigator.mediaDevices.getUserMedia = () => { window.__gumCalls++; const ms = window.__gumDelay;
     return new Promise(res => setTimeout(() => res(make()), ms)); };
   window.__micLive = () => streams.some(s => s.getAudioTracks().some(t => t.readyState === 'live'));
+  window.__micArr = []; window.__micStop = []; window.__plays = [];
+  const realStop = MediaStreamTrack.prototype.stop;
+  MediaStreamTrack.prototype.stop = function () { if (this.readyState === 'live') window.__micStop.push(performance.now()); return realStop.call(this); };
+  const realPlay = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    const ps = document.getElementById('player');
+    if (!this.muted && ps && ps.src && this.src === ps.src && this !== ps) window.__plays.push(performance.now());
+    return realPlay.call(this);
+  };
+  const realGum = navigator.mediaDevices.getUserMedia;
+  navigator.mediaDevices.getUserMedia = c => realGum(c).then(s => { window.__micArr.push(performance.now()); return s; });
 };
 const untilLine = async (page, before, re, ms) => { const t = Date.now(); while (Date.now() - t < ms) { if (re.test(since(await log(page), before))) return true; await page.waitForTimeout(100); } return false; };
 // 播放期間每 0.2 秒看一次：在播、而且麥克風開著＝違規
@@ -43,6 +57,12 @@ const stopPlay = async page => { await page.click('#testBtn'); };
   console.log('① 等麥克風時按手動播放：播放中麥克風開著 =', w1.bad + '/' + w1.n, w1.bad === 0 ? '✅ 沒有' : '❌ 開著（聲音會被留在手機）');
   console.log('   讓位那一行：', y1 ? '✅ ' + y1.slice(9, 60) : '❌ 沒有');
   console.log('   播放中有沒有已經開始監聽 =', /　開始監聽（/.test(l1) ? '❌ 有（麥克風在播放時打開了）' : '✅ 沒有');
+  const tm = await page.evaluate(() => ({ arr: window.__micArr.slice(-1)[0], stop: window.__micStop.slice(-1)[0], play: window.__plays.slice(-1)[0] }));
+  const gap = tm.play - tm.stop;
+  console.log('   時間點：麥克風回來 ' + Math.round(tm.arr) + '、放掉 ' + Math.round(tm.stop) + '、音樂 play() ' + Math.round(tm.play) + ' 毫秒 →',
+    tm.play > tm.arr && gap >= 700 ? '✅ 放掉之後隔 ' + Math.round(gap) + ' 毫秒才播' : '❌ 音樂比麥克風先開始（重疊）');
+  const trig1 = pick(l1, /🔊 觸發播放（手動播放/);
+  console.log('   觸發那一行：', /請求沒回應/.test(trig1) ? '❌ 把正在路上的請求標成 ⚠️' : '✅ 沒有多寫', trig1.slice(9, 60));
   await page.evaluate(() => { window.__gumDelay = 0; });
   const b1b = await log(page);
   await stopPlay(page);

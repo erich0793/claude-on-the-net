@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v121</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v122</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -843,6 +843,8 @@
   let pendingAutoStart = false;
   // v121：開始監聽讓位給播放——等麥克風的那一兩秒裡有播放開始了，這一輪播完再開始（見 start()）
   let startAfterAlert = false;
+  // v122：start() 正在等的那一個麥克風請求。trigger 撞上它時，要等它回來、被放掉，再給路由 800ms
+  let startMicPending = null;
   // 最近一次使用者手勢的時刻。播放被 pause 掉時要靠它分辨是「使用者按的」還是
   // 「系統中斷的（音訊路由改變、藍牙斷線）」——08/22 20:55 那次寫成「手動停止播放」，
   // 但連使用者自己都不確定是不是他按的，等於把最關鍵的一條線索寫死了
@@ -1745,7 +1747,8 @@
       if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} stream = null; }
       if (alerting) { yieldStartToPlayback(false); return; } // 正在播：先別碰麥克風（見 yieldStartToPlayback）
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
-      stream = await micWithTimeout();
+      startMicPending = micWithTimeout(); // 讓 trigger 知道有一個麥克風在路上（v122）
+      try { stream = await startMicPending; } finally { startMicPending = null; }
       // 取得權限後才能讀裝置清單：找出內建麥克風並固定使用；
       // 若這次抓到的不是內建（例如藍牙音響的通話麥克風），立刻換成內建
       if (!builtinMicId) {
@@ -1800,6 +1803,7 @@
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
     deafRuns = 0; // 「全滅了幾分鐘」是這一次監聽的數字，不該跨越停止／重新開始
+    resetRate = 0; resetRateN = 0; // 取樣率的比較也以「本次監聽」為範圍（開始監聽那一刻的引擎是在錄音中建的，不算）
     // 開始監聽時沒有可信的前值，首次校準必須放手學習房間真正的背景
     floorAtOff = null; clampLogged = 0;
     watchOpen(); // 時間表的底色：記下「從這一刻開始有在聽」
@@ -1949,19 +1953,25 @@
   // 還是永遠不回來，以前完全看不到。三個數字記下來，下一次就分得出來：
   // 還掛著幾個、後來回來了幾個（成功／失敗、等了多久）
   let micReqPending = 0, micLateOK = 0, micLateErr = 0, micLateErrName = "", micLateMaxMs = 0;
+  // v122：還掛著的請求裡，哪些已經逾時。觸發那一行只該標出逾時的（v119 要抓的是被丟下的請求）；
+  // 剛送出、正常在路上的那一個不算——10/27 16:29:51 那一行的「麥克風還有 1 個請求沒回應」
+  // 就是開始監聽正在等的那一個，它 2 秒後就回來了，標成 ⚠️ 只會讓人以為出事
+  const micReqs = new Set();
   function micWithTimeout(ms) {
     readMicPerm("要麥克風時"); // 不等它：逾時那一刻 micPerm 已經是這次請求當下的狀態
     const sentAt = Date.now();
     const req = navigator.mediaDevices.getUserMedia(micConstraints());
     let late = false;
     micReqPending++;
-    const settled = () => { micReqPending--; };
+    const rec = { overdue: false };
+    micReqs.add(rec);
+    const settled = () => { micReqPending--; micReqs.delete(rec); };
     req.then(settled, settled);
     const lateAt = () => { micLateMaxMs = Math.max(micLateMaxMs, Date.now() - sentAt); };
     return Promise.race([
       req.then(s => { if (late) { micLateOK++; lateAt(); try { s.getTracks().forEach(t => t.stop()); } catch (e) {} throw new Error("麥克風逾時"); } return s; },
                e => { if (late) { micLateErr++; micLateErrName = (e && e.name) || "未知"; lateAt(); } throw e; }),
-      new Promise((_, rej) => setTimeout(() => { late = true; rej(new Error("麥克風逾時")); }, ms || 10000))
+      new Promise((_, rej) => setTimeout(() => { late = true; rec.overdue = true; rej(new Error("麥克風逾時")); }, ms || 10000))
     ]);
   }
   // 拿不到麥克風的當下，系統是什麼狀態。兩個假設要分開：
@@ -1989,6 +1999,20 @@
   // 深度音訊重置：不重載頁面（重載會丟失使用者手勢的播放授權，之後的播放
   // 會被 iOS 丟進通話級的劣化管線），改為徹底關閉本頁所有音訊資源數秒，
   // 讓 iOS 重新仲裁輸出路由，再重建麥克風恢復監聽。
+  // v122：深度重置建立引擎的那一刻麥克風是關的，取樣率應該是「當下輸出裝置」的硬體取樣率。
+  // 10/22～10/27 的 74 次重建裡 73 次是 44100，只有 10/27 14:46:40 那一次是 48000——
+  // 那一輪警報結束後 2 分半，使用者就按了停止監聽。如果 44100＝這台喇叭、48000＝手機，
+  // 這就是網頁第一次能自己看出「聲音改從手機出來」。還沒證實，所以先只寫進紀錄：
+  // 同一次監聽裡取樣率變了就寫一行，連同前面維持了幾次
+  let resetRate = 0, resetRateN = 0;
+  function noteResetRate(r) {
+    if (resetRate && r !== resetRate) {
+      logEvent("🔬 這次重建的取樣率是 " + r + "Hz，前 " + resetRateN + " 次都是 " + resetRate + "Hz——"
+        + "音訊輸出裝置可能換了（例如藍牙喇叭斷線，聲音改從手機出來；或重新連上）");
+      resetRateN = 0;
+    }
+    resetRate = r; resetRateN++;
+  }
   let resetting = false;
   async function deepAudioReset() {
     if (resetting) return;
@@ -2027,6 +2051,7 @@
       // 8k/16k/24k。淡出引擎早就有 <40000 的檢查（見 fadeCtx），偵測引擎卻從來沒驗過，
       // 事後也查不到——08/16 16:15 重建後整整 30 分鐘偵測不出任何東西，就分不清
       // 是引擎劣化還是環境問題。加一個數字，這個問題以後永遠不必再猜
+      noteResetRate(audioCtx.sampleRate);
       logEvent("音訊已重建，恢復監聽（取樣率 " + audioCtx.sampleRate + "Hz）"
         + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
       if (running && !alerting) setStatus("listening", "監聽中…", "已回到偵測狀態");
@@ -2995,15 +3020,22 @@
   // 只在不正常時才寫，平常這一行一個字都不會多
   function trigAudioTag() {
     const parts = [];
-    if (micReqPending) parts.push("麥克風還有 " + micReqPending + " 個請求沒回應");
+    const stuck = [...micReqs].filter(r => r.overdue).length;
+    if (stuck) parts.push("麥克風還有 " + stuck + " 個逾時的請求沒回應");
     if (audioCtx && audioCtx.state === "interrupted") parts.push("音訊引擎被系統中斷");
     const as = navigator.audioSession;
     if (as && as.state === "interrupted") parts.push("音訊工作階段被系統中斷");
     return parts.length ? "｜⚠️ " + parts.join("、") : "";
   }
+  // v122：每一輪播放的編號。播放之後的計時檢查要確認自己看的還是「同一輪」——
+  // 6 秒卡死檢查原本只問「現在在播嗎」（alerting）和「現在那一顆」（curEl()），
+  // 上一輪若在 6 秒內結束、下一輪剛開始，它就會拿下一輪還沒出聲的元素判成卡死並重載頁面
+  //（v122 讓「等麥克風」的那一輪晚一點才播，探針第一次跑就整頁重載）
+  let alertSeq = 0;
   // minsOverride：手動播放時由選單當場指定；偵測觸發則沿用「觸發後播放時長」設定
   function trigger(reason, minsOverride) {
     if (alerting) return;
+    const mySeq = ++alertSeq;
     alerting = true; alertBegunAt = Date.now(); cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
     const evPeakAtTrig = evPeakDb; evPeakDb = -120; burstPeakDb = -120; // 讀走這次的證據峰值後歸零，不留給下一次
     if (player.src) {
@@ -3103,7 +3135,17 @@
       // 先關麥克風再播放：iOS 在錄音期間會把輸出留在手機喇叭
       if (stream) { stream.getTracks().forEach(t => t.stop()); micOffAt = Date.now(); micOffPlaying = true; floorAtOff = noiseFloor > -100 ? noiseFloor : null; }
       if (audioCtx && audioCtx.state === "running") audioCtx.suspend(); // 麥克風引擎播放期間一律休眠
+      const micInFlight = startMicPending;
       setTimeout(async () => {
+        // v122：開始監聽正在等麥克風時撞上播放——先等那個請求回來（start() 會當場放掉它，
+        // 見 yieldStartToPlayback），再像平常一樣隔 800ms 才播。v121 只做到「回來就放掉」：
+        // 10/27 16:29:51 那次音樂先開始，麥克風 1 秒多之後才回來，中間那一下仍是在播放中開了麥克風。
+        // 封頂 4 秒：請求真的卡住時，不能讓音樂一直等
+        if (micInFlight) {
+          await Promise.race([micInFlight.catch(() => {}), new Promise(r => setTimeout(r, 4000))]);
+          await new Promise(r => setTimeout(r, 800));
+          if (!alerting || alertSeq !== mySeq) return; // 等的時候被停掉了
+        }
         // 淡出：為本輪建立專屬全新引擎；失敗或引擎劣化則自動退全音量（警報永遠有聲）。
         // 增益 ramp 與元素的 loop 解耦——音檔循環重頭時音量曲線持續遞減，銜接無跳變
         if (wantFade && el !== player) {
@@ -3305,7 +3347,7 @@
         // v100 之前是 4000ms，與新的檢查同時開火，兩個機制會互相打架
         setTimeout(() => {
           const el = curEl();
-          if (!alerting || !playStarted) return;
+          if (!alerting || alertSeq !== mySeq || !playStarted) return; // 只看自己這一輪（見 alertSeq）
           if (!(el.paused || el.currentTime < 0.3)) return;
           // 重載是最後手段：它會沒收手勢授權，代價是接下來每一次觸發都只剩嗶聲，
           // 直到使用者親手碰畫面為止（09/05 實測 34 分鐘、連續 10 次）。

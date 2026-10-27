@@ -82,7 +82,7 @@ const untilLine = async (page, before, re, ms) => { const t = Date.now(); while 
   await page.waitForTimeout(1500);
   const trig = pick(since(await log(page), before), /🔊 觸發播放/);
   console.log('   接著觸發：', trig.slice(9, 160));
-  console.log('   觸發那一行標出「麥克風還有 ' + stuck + ' 個請求沒回應」=', new RegExp('麥克風還有 ' + stuck + ' 個請求沒回應').test(trig) ? '✅' : '❌');
+  console.log('   觸發那一行標出「麥克風還有 ' + stuck + ' 個請求沒回應」=', new RegExp('麥克風還有 ' + stuck + ' 個(逾時的)?請求沒回應').test(trig) ? '✅' : '❌');
 
   // ⑤ 都回來之後
   await page.waitForTimeout(12000); // 警報結束、深度重置、接回
