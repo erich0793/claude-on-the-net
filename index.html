@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v122</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v123</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -194,6 +194,7 @@
       <div class="txt" id="statusText">尚未開始<small id="statusSub">請先選擇音檔並開啟麥克風</small></div>
     </div>
     <div id="routeWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--danger); background:var(--panel-2); line-height:1.5"></div>
+    <div id="rateWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--danger); background:var(--panel-2); line-height:1.5"></div>
     <div id="permWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--danger); background:var(--panel-2); line-height:1.5; cursor:pointer"></div>
     <div id="poolWarn" hidden style="margin:10px 0 0; padding:10px 12px; border-radius:10px; border:1px solid var(--warn); background:var(--panel-2); line-height:1.5"></div>
     <div class="row">
@@ -1609,6 +1610,7 @@
   }
   function paintPool() {
     paintRoute(); // 兩塊畫面警示同一批呼叫點：任何重畫池警示的時機，也是重畫這塊的時機
+    paintRate();  // v123：「聲音送去的裝置換了」也一樣（停止監聽時要一起收起來）
     const el = $("poolWarn");
     if (!el) return;
     const ok = elPool.filter(e => e._unlockOK && !e._inUse).length;
@@ -1672,13 +1674,20 @@
 
   // 任何點擊都是使用者手勢：順手把元素池補滿，不必特地重按「開始監聽」。
   // 監聽中才做，且池滿時 topUpPool 直接空轉，成本為零
-  document.addEventListener("pointerdown", () => {
+  document.addEventListener("pointerdown", ev => {
     lastGestureAt = Date.now(); // 播放被停掉時要靠它分辨是使用者按的還是系統中斷的
     // 關掉「藍牙可能斷線」提示，並記下它掛了多久、期間播了幾次——這就是這段退化的實際長度
     if (routeLostAt && Date.now() - routeLostAt > 2000) {
       logEvent("🔧 已有人看到「播放被系統中斷」提示（掛了 " + fmtDry(Date.now() - routeLostAt)
         + "，期間 " + routeLostN + " 次警報）");
       routeLostAt = 0; routeLostN = 0; paintRoute();
+    }
+    // v123：同一套作法收起「聲音送去的裝置換了」——但按的是提示裡那顆按鈕時不收（要讓它按得到）
+    const inRate = ev && ev.target && ev.target.closest && ev.target.closest("#rateWarn");
+    if (rateLostAt && !inRate && Date.now() - rateLostAt > 2000) {
+      logEvent("🔧 已有人看到「聲音送去的裝置換了」提示（掛了 " + fmtDry(Date.now() - rateLostAt)
+        + "，期間 " + rateLostN + " 次警報）");
+      rateLostAt = 0; rateLostN = 0; paintRate();
     }
     // 只在真的快見底時才補（過去只要少一顆就補，等於每次碰畫面都來一次
     // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿。
@@ -1804,6 +1813,7 @@
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
     deafRuns = 0; // 「全滅了幾分鐘」是這一次監聽的數字，不該跨越停止／重新開始
     resetRate = 0; resetRateN = 0; // 取樣率的比較也以「本次監聽」為範圍（開始監聽那一刻的引擎是在錄音中建的，不算）
+    rateLostAt = 0; rateLostN = 0;  // 重新開始監聽＝重新起算，上一次監聽的提示一起收掉
     // 開始監聽時沒有可信的前值，首次校準必須放手學習房間真正的背景
     floorAtOff = null; clampLogged = 0;
     watchOpen(); // 時間表的底色：記下「從這一刻開始有在聽」
@@ -2005,14 +2015,44 @@
   // 這就是網頁第一次能自己看出「聲音改從手機出來」。還沒證實，所以先只寫進紀錄：
   // 同一次監聽裡取樣率變了就寫一行，連同前面維持了幾次
   let resetRate = 0, resetRateN = 0;
+  // v123：使用者確認了 10/27 那一次——14:43 那一輪起，喇叭和手機都**完全沒有聲音**，
+  // 一直到 16:30 重新整理網頁才好。所以「44100 期間冒出 48000」不只是紀錄裡的一個數字：
+  // 那是唯一一個網頁自己看得到的線索，而沒聲音是只有使用者修得好的事（五之三之七）——要掛在畫面上。
+  // 5 週紀錄裡同一次監聽中重建取樣率改變只有這一次（0 次誤報）。
+  // 方向：iPhone 本機輸出是 48000；換成 48000（或通話等級的低取樣率）才示警，換回原本的就自動收起
+  let rateLostAt = 0, rateLostN = 0, rateFrom = 0, rateTo = 0;
   function noteResetRate(r) {
     if (resetRate && r !== resetRate) {
       logEvent("🔬 這次重建的取樣率是 " + r + "Hz，前 " + resetRateN + " 次都是 " + resetRate + "Hz——"
         + "音訊輸出裝置可能換了（例如藍牙喇叭斷線，聲音改從手機出來；或重新連上）");
+      if (rateLostAt && r === rateFrom) {
+        logEvent("🔧 輸出裝置換回來了（取樣率回到 " + r + "Hz）——「聲音送去的裝置換了」提示自動收起（掛了 "
+          + fmtDry(Date.now() - rateLostAt) + "，期間 " + rateLostN + " 次警報）");
+        rateLostAt = 0; rateLostN = 0;
+      } else if (!rateLostAt && (r === 48000 || r < 40000)) {
+        rateLostAt = Date.now(); rateLostN = 0; rateFrom = resetRate;
+      }
+      if (rateLostAt) rateTo = r;
+      paintRate();
       resetRateN = 0;
     }
     resetRate = r; resetRateN++;
   }
+  function paintRate() {
+    const el = $("rateWarn");
+    if (!el) return;
+    if (!running || !rateLostAt) { el.hidden = true; return; }
+    const d = new Date(rateLostAt), hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    el.hidden = false;
+    el.innerHTML = "🔇 <b>" + hm + " 那一輪播完，聲音送去的裝置換了——音樂可能沒有從藍牙喇叭出來</b>"
+      + "<span class='hint' style='display:block'>網頁看到音訊輸出的規格從 " + rateFrom + " 變成 " + rateTo + "。"
+      + "10/27 下午就是這樣，之後的音樂喇叭和手機都完全沒聲音，重新整理網頁才好。"
+      + (rateLostN ? "之後已有 <b>" + rateLostN + " 次</b>警報。" : "")
+      + "請確認藍牙喇叭還連著、手機音量沒有調到最小；都正常卻還是沒聲音，就按下面這顆（不必重新整理網頁），"
+      + "還是不行再重新整理。看過之後<b>碰一下畫面其他地方</b>，這則提示就會消失。</span>"
+      + "<button data-respeak style='margin-top:8px'>🔈 重新取得喇叭</button>";
+  }
+  $("rateWarn").addEventListener("click", e => { if (e.target.closest && e.target.closest("[data-respeak]")) respeaker(); });
   let resetting = false;
   async function deepAudioReset() {
     if (resetting) return;
@@ -3087,6 +3127,7 @@
       }
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (routeLostAt) routeLostN++;
+      if (rateLostAt) { rateLostN++; paintRate(); }
       paintPool();      // 池是在這裡被消耗的，畫面要當場跟上
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       // 「元素在前進」抓不到的另一種無聲：**播的是對的檔案嗎？音量對嗎？**
