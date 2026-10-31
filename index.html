@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v124</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v125</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2129,10 +2129,15 @@
     el.hidden = false;
     el.innerHTML = "🔇 <b>" + hm + " 那一輪播完，聲音送去的裝置換了——音樂可能沒有從藍牙喇叭出來</b>"
       + "<span class='hint' style='display:block'>網頁看到音訊輸出的規格從 " + rateFrom + " 變成 " + rateTo + "。"
-      + "10/27 下午就是這樣，之後的音樂喇叭和手機都完全沒聲音，重新整理網頁才好。"
+      // v125：使用者確認 10/31 那一次是「改從手機出來」，不是 10/27 那樣完全沒聲音。
+      // 舊的說明寫「都正常卻還是沒聲音，就按下面這顆」——可是那時明明有聲音（從手機），
+      // 照字面讀就不知道該不該按。兩種情況的分岔點其實是藍牙設定裡那台喇叭的狀態（使用說明早就這樣寫）
+      + "10/31 晚上就是這樣，之後的音樂改從手機出來；10/27 下午更糟，喇叭和手機都完全沒聲音。"
       + (rateLostN ? "之後已有 <b>" + rateLostN + " 次</b>警報。" : "")
-      + "請確認藍牙喇叭還連著、手機音量沒有調到最小；都正常卻還是沒聲音，就按下面這顆（不必重新整理網頁），"
-      + "還是不行再重新整理。看過之後<b>碰一下畫面其他地方</b>，這則提示就會消失。</span>"
+      + "<br><b>先看 iPhone「設定 → 藍牙」裡這台喇叭：</b>"
+      + "<br>・顯示「<b>未連線</b>」：喇叭斷了或睡著了——把喇叭打開、在藍牙設定裡重新連上（按網頁的按鈕沒有用）"
+      + "<br>・顯示「<b>已連線</b>」：是網頁這邊卡住了——按下面這顆（不必重新整理網頁），還是不行再重新整理"
+      + "<br>看過之後<b>碰一下畫面其他地方</b>，這則提示就會消失。</span>"
       + "<button data-respeak style='margin-top:8px'>🔈 重新取得喇叭</button>";
   }
   $("rateWarn").addEventListener("click", e => { if (e.target.closest && e.target.closest("[data-respeak]")) respeaker(); });

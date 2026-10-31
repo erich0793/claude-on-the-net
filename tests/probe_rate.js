@@ -36,6 +36,9 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   n = notes(since(await log(page), before)); b = await banner(page);
   console.log('② 變成 48000：', n.length === 1 && /48000Hz，前 2 次都是 44100Hz/.test(n[0]) ? '✅ ' + n[0].slice(9, 50) : '❌ ' + (n[0] || '沒寫').slice(0, 50));
   console.log('   紅框 =', b.shown && /裝置換了/.test(b.text) && /44100 變成 48000/.test(b.text) ? '✅ ' + b.text.slice(0, 44) : '❌ ' + b.text.slice(0, 44));
+  // v125：10/31 那次是「改從手機出來」，舊說明只寫「還是沒聲音就按」——有聲音時照字面讀不知道該不該按。
+  // 分岔點是藍牙設定裡那台喇叭「已連線／未連線」，兩種都要說到
+  console.log('   處置先看藍牙設定（「未連線」「已連線」分開說）=', /設定 → 藍牙/.test(b.text) && /未連線/.test(b.text) && /已連線/.test(b.text) ? '✅' : '❌');
   await alertOnce(page);
   b = await banner(page);
   console.log('   接著又一次警報：紅框算進去 =', /之後已有 1 次警報/.test(b.text) ? '✅' : '❌ ' + b.text.slice(0, 80));
