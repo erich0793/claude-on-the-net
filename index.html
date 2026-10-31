@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v123</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v124</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -736,6 +736,26 @@
   // 這是第一個要排除的變因，而它原本完全不在紀錄裡
   const safariVer = (/Version\/([\d.]+)/.exec(navigator.userAgent) || [])[1];
   logEvent("📄 頁面載入（" + APP_VER + (safariVer ? "｜Safari " + safariVer : "") + "）");
+  // v124：上一次監聽是怎麼結束的。10/29～10/30 有三次沒有「停止監聽」就斷了（12:52、23:11、14:00 之後），
+  // 下一行已經是幾個小時後的「頁面載入」——是有人關了分頁、iOS 把它收掉、還是手機重開機，
+  // 紀錄分不出來，連幾點斷的都只能從每 2 小時一行的 🔄 推個大概。
+  // 監聽中每 30 秒記一次「還在聽、在前景還是背景」，停止監聽時清掉；網頁收到「要關閉」（pagehide）時也記一筆。
+  // 打開網頁時它還在＝上一次沒按停止就結束了：寫出最後確認還在聽的時刻，以及有沒有收到關閉通知
+  //（收到＝多半是重新整理或關分頁；沒收到＝多半是被 iOS 收掉、Safari 被滑掉或手機重開機）
+  const RUN_KEY = "runBeat";
+  const noteRunBeat = extra => { try { localStorage.setItem(RUN_KEY, JSON.stringify(Object.assign({ t: Date.now(), v: document.visibilityState }, extra))); } catch (e) {} };
+  const clearRunBeat = () => { try { localStorage.removeItem(RUN_KEY); } catch (e) {} };
+  try {
+    const rb = JSON.parse(localStorage.getItem(RUN_KEY) || "null");
+    if (rb && rb.t) {
+      const d = new Date(rb.t), p2 = n => (n < 10 ? "0" : "") + n;
+      logEvent("📄 上一次監聽沒有按「停止」就結束了：最後確認還在聽是 " + (d.getMonth() + 1) + "/" + p2(d.getDate())
+        + " " + p2(d.getHours()) + ":" + p2(d.getMinutes()) + "（頁面在" + (rb.v === "hidden" ? "背景" : "前景") + "），離現在 " + fmtDry(Date.now() - rb.t)
+        + (rb.h ? "——網頁有收到關閉通知（多半是重新整理或關掉分頁）" : "——網頁沒有收到關閉通知（多半是被 iOS 收掉、Safari 被滑掉，或手機重新開機）"));
+    }
+  } catch (e) {}
+  clearRunBeat();
+  addEventListener("pagehide", () => { if (running) noteRunBeat({ h: 1 }); });
 
   // 檢查有沒有新版：GitHub Pages 的 HTML 快取 10 分鐘、iOS Safari 又特別頑固，
   // 常常改好了卻還在看舊版。這裡主動比對版本號，有新版就顯示橫幅——
@@ -1715,15 +1735,37 @@
     starting = false;
     startAfterAlert = true;
     startBtn.disabled = false;
+    stopBtn.disabled = true; // v124：重試麥克風的期間「停止」是開著的（用來取消），讓位之後要關回去
     logEvent("🔧 開始監聽讓位給剛開始的播放" + (gotMic ? "（麥克風已放掉）" : "")
       + "——播放時開著麥克風，iOS 會把聲音留在手機喇叭；這一輪播完就自動開始監聽");
     setStatus("alert", "播放中…", "播完就會自動開始監聽（播放時不開麥克風，聲音才會從喇叭出來）");
+  }
+  // v124：開始監聽時麥克風沒回應，就自己再要——不能一次逾時就把按鈕交還、整頁停著不聽。
+  // 10/29 18:58:38 打開網頁、18:58:45 按開始監聽、18:58:55 逾時。那時連「讀權限」都還沒回來
+  //（18:59:02 才讀到「允許」，比頁面載入晚了 24 秒）——Safari 剛打開時，麥克風那一套還在忙。
+  // 再要一次多半就拿到了，可是當時沒有人在看，網頁就這樣 38 分鐘沒在聽，直到 19:37 重新整理。
+  // 同一個樣子出現過三次，全都在頁面載入後幾秒內：10/03 05:31、10/23 15:02（連兩次）、10/29 18:58。
+  // 前兩次使用者剛好在旁邊、自己重新整理了；第三次沒人看見。
+  // 只重試「逾時」：被拒絕（NotAllowedError）之類的錯誤再要幾次都一樣，照舊交還按鈕。
+  // 重試期間「停止」可以按，用來取消；startSeq 讓被取消的那一串認得出自己已作廢——
+  // 那時還在路上的請求晚一點才回來，也只會被放掉，不會變成監聽
+  let startSeq = 0;
+  const startRetryWait = n => n <= 3 ? 2000 : n <= 10 ? 30000 : 60000; // 同 recoverMic 的退避：卡很久時別一直堆請求
+  function cancelStart() {
+    startSeq++;
+    starting = false;
+    pendingAutoStart = false;
+    keeperOff(); freshOff(); // start() 在要麥克風之前就開了，要一起收（同 stop()）
+    startBtn.disabled = false; stopBtn.disabled = true;
+    setStatus("", "已停止", "麥克風已關閉");
+    logEvent("停止監聽（還在等麥克風，這次開始監聽取消）");
   }
   // ev：只有開始按鈕的 click 會帶著事件進來；計時器、回到前景、重載後自動恢復都是 start()。
   async function start(ev) {
     if (starting || running) return;
     const viaGesture = !!(ev && ev.isTrusted);
     starting = true;
+    const mySeq = ++startSeq; // v124
     pendingAutoStart = false; // 使用者自己按了，或延後的接手已經啟動：旗標任務結束
     const startT0 = Date.now(); // 逾時訊息要講真話：背景分頁計時器被凍結時，實際等待遠不只 10 秒
     startBtn.disabled = true; // 立刻停用（過去要等 getUserMedia 成功才停，那 3–4 秒是重入破口）
@@ -1756,8 +1798,47 @@
       if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} stream = null; }
       if (alerting) { yieldStartToPlayback(false); return; } // 正在播：先別碰麥克風（見 yieldStartToPlayback）
       // 開啟自動增益：遠處或小聲的哭聲會被拉抬到可偵測的音量
-      startMicPending = micWithTimeout(); // 讓 trigger 知道有一個麥克風在路上（v122）
-      try { stream = await startMicPending; } finally { startMicPending = null; }
+      // v124：逾時就再要一次（見 startSeq 的註解），直到拿到、有人按停止、播放開始（讓位），
+      // 或頁面進了背景（iOS 不給背景頁面麥克風，回到前景再接著要）
+      for (let tryN = 1; ; tryN++) {
+        const req = micWithTimeout();
+        startMicPending = req; // 讓 trigger 知道有一個麥克風在路上（v122）
+        let got = null, err = null;
+        try { got = await req; } catch (e) { err = e; }
+        if (startMicPending === req) startMicPending = null;
+        if (mySeq !== startSeq) { // 等的時候被取消了
+          if (got) { try { got.getTracks().forEach(t => t.stop()); } catch (e) {} }
+          return;
+        }
+        const secs = Math.round((Date.now() - startT0) / 1000);
+        if (got) {
+          stream = got;
+          stopBtn.disabled = true; // 拿到了：可以取消的那一段到此為止（開始監聽之後下面會照常打開）
+          if (tryN > 1) logEvent("🔧 開始監聽：第 " + tryN + " 次才拿到麥克風（從開始要麥克風算起共等了 " + secs + " 秒）" + micStateTag());
+          break;
+        }
+        if (!(err && err.message === "麥克風逾時")) throw err;
+        const leave = () => { // 不再在這裡等：交給讓位、或回到前景之後
+          if (alerting) { yieldStartToPlayback(false); return true; }
+          if (document.visibilityState !== "hidden") return false;
+          starting = false; pendingAutoStart = true; // visibilitychange 回到前景時會叫 start()
+          startBtn.disabled = false; stopBtn.disabled = true;
+          logEvent("⏸ 開始監聽：麥克風 " + Math.round((Date.now() - startT0) / 1000) + " 秒沒有回應，而頁面在背景（iOS 不會把麥克風給背景頁面）——回到前景就會自動接著開始監聽");
+          setStatus("alert", "頁面在背景，還沒開始監聽", "iOS 不讓背景頁面取得麥克風。點亮螢幕回到這一頁就會自動接著開始監聽，不必重新整理");
+          return true;
+        };
+        if (leave()) return;
+        const wait = startRetryWait(tryN);
+        // 節流同 recoverMic：前三次照記，之後每 10 次一行
+        if (tryN <= 3 || tryN % 10 === 0) logEvent("⚠️ 開始監聽：麥克風 " + secs + " 秒沒有回應，" + Math.round(wait / 1000)
+          + " 秒後自動再要一次（第 " + (tryN + 1) + " 次）——還沒開始聽" + micStateTag());
+        stopBtn.disabled = false; // 重試期間可以按停止取消
+        setStatus("alert", "麥克風還沒有回應，自動再試中…（還沒開始聽）", micPerm === "prompt" ? PERM_HINT
+          : "已等了 " + secs + " 秒。Safari 剛打開時有時會這樣，通常再要一兩次就拿到了——不用重新整理，要取消請按「停止」");
+        await new Promise(r => setTimeout(r, wait));
+        if (mySeq !== startSeq) return;
+        if (leave()) return;
+      }
       // 取得權限後才能讀裝置清單：找出內建麥克風並固定使用；
       // 若這次抓到的不是內建（例如藍牙音響的通話麥克風），立刻換成內建
       if (!builtinMicId) {
@@ -1784,6 +1865,7 @@
             : "麥克風沒有回應（多半是前一個分頁還占著）。可直接再按一次；仍不行就把此分頁完全關掉再重開")
                  : (e && e.message) || "請確認已授權，且在 https/localhost 下開啟");
       startBtn.disabled = false; // 不必重載頁面就能重試
+      stopBtn.disabled = true;   // v124：重試期間打開過
       starting = false;
       return;
     }
@@ -1817,6 +1899,7 @@
     // 開始監聽時沒有可信的前值，首次校準必須放手學習房間真正的背景
     floorAtOff = null; clampLogged = 0;
     watchOpen(); // 時間表的底色：記下「從這一刻開始有在聽」
+    noteRunBeat(); // v124：開始後 30 秒內就斷的也要抓得到
     logEvent("開始監聽（" + (trigMode.value === "fuss" ? "哭泣＋哀叫" : "僅哭泣") + "，靈敏度 " + sens.value + "%）"
       + "，取樣率 " + audioCtx.sampleRate + "Hz"
       + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
@@ -2311,7 +2394,7 @@
   const ALIVE_MIN = 10, WATCH_MS = 30000;
   let lastTicks = -1, stallSince = 0, lastStallLog = 0;
   setInterval(() => {
-    if (running) watchBeat(); // 搭便車寫底色紀錄的心跳：不另開一個計時器
+    if (running) { watchBeat(); noteRunBeat(); } // 搭便車寫底色紀錄的心跳：不另開一個計時器（v124：連「還在聽」一起記）
     paintPool();              // 兜底：任何漏掉的消耗路徑最遲 30 秒後也會反映在畫面上
     // 保連脈衝的生命跡象。它自己被擋掉時是完全靜默的，只能由外面的人來問
     //（監控者與被監控者同生共死等於沒有監控——這是迴圈看門狗的同一條教訓）。
@@ -2370,6 +2453,9 @@
   }, WATCH_MS);
 
   function stop() {
+    // v124：還在重試麥克風、根本還沒開始聽——只要取消那一串。下面那些收尾是給「正在聽」的，
+    // 在這裡跑會把上一段監聽的底色一路延長到現在（watchClose 改的是最後一段）
+    if (starting && !running) { cancelStart(); return; }
     const hungEl = curEl();   // 需在 stopAlert 清空 alertEl 前捕捉，卡死保險才盯得到正確元素
     running = false;          // 先標記停止，避免 stopAlert 觸發的麥克風重連又把麥克風打開
     startAfterAlert = false;  // 按了停止：剛才讓位的開始監聽也一併取消
@@ -2388,6 +2474,7 @@
     // 還沒結算的失聰段要在這裡結掉：留到下一次監聽的話，會跨越整段停機時間變成一大段
     if (micDownSince) { deafAdd(micDownSince, Date.now()); micDownSince = 0; }
     watchClose(); // 底色記錄收尾：結束時間定在當下
+    clearRunBeat(); // v124：有按停止＝正常結束，下次打開不必提
     startBtn.disabled = false; stopBtn.disabled = true;
     setStatus("", "已停止", "麥克風已關閉");
     logEvent("停止監聽");
