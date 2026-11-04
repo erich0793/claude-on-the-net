@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v126</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v127</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2118,8 +2118,13 @@
   // 也是第一個「48000 其實是喇叭」的證據來源）、停止監聽（只是不顯示，記憶還在）
   const OUT_KEY = "outRate";
   let rateCarry = false, rateSeen = false; // rateCarry：記憶是從上一次監聽帶來的，這一次還沒重建過
+  // v127：紅框直接問「藍牙設定裡這台喇叭顯示什麼」，按了就寫進紀錄。
+  // 每一次都是事後才問：10/31 的「從手機出來」問到了，11/04 只問到「重新整理之後沒有回到喇叭」，
+  // 藍牙那時是「已連線」還是「未連線」使用者已經想不起來——而這正是決定機制的那一題
+  //（未連線＝喇叭端的事；已連線＝聲音被 iOS 送到手機）。當下按一下，比事後回想可靠得多
+  let rateAns = ""; // "" 還沒回答／"off" 未連線／"on" 已連線
   function saveOutRate() {
-    try { localStorage.setItem(OUT_KEY, JSON.stringify({ r: resetRate, lost: rateLostAt, from: rateFrom, to: rateTo, n: rateLostN })); } catch (e) {}
+    try { localStorage.setItem(OUT_KEY, JSON.stringify({ r: resetRate, lost: rateLostAt, from: rateFrom, to: rateTo, n: rateLostN, a: rateAns })); } catch (e) {}
   }
   function loadOutRate() {
     let s = null;
@@ -2127,7 +2132,17 @@
     resetRate = (s && +s.r) || 0; resetRateN = 0;
     rateLostAt = (s && +s.lost) || 0; rateLostN = (s && +s.n) || 0;
     rateFrom = (s && +s.from) || 0; rateTo = (s && +s.to) || 0;
+    rateAns = (s && rateLostAt && (s.a === "on" || s.a === "off")) ? s.a : "";
     rateCarry = !!resetRate; rateSeen = false;
+  }
+  function rateAnswer(v) {
+    if (!rateLostAt || v === rateAns) return;
+    const was = rateAns;
+    rateAns = v;
+    logEvent("🔧 紅框回報：iPhone 藍牙設定裡喇叭顯示「" + (v === "on" ? "已連線" : "未連線") + "」"
+      + (was ? "（原本選的是「" + (was === "on" ? "已連線" : "未連線") + "」）" : "")
+      + "——紅框掛了 " + fmtDry(Date.now() - rateLostAt) + "，期間 " + rateLostN + " 次警報");
+    saveOutRate(); paintRate();
   }
   // 紅框上的時刻：不是今天的要連日期一起寫（記憶會跨過重新整理、跨過一夜）
   function rateWhen(t) {
@@ -2143,9 +2158,9 @@
       if (rateLostAt && r === rateFrom) {
         logEvent("🔧 輸出裝置換回來了（取樣率回到 " + r + "Hz）——「聲音送去的裝置換了」提示自動收起（掛了 "
           + fmtDry(Date.now() - rateLostAt) + "，期間 " + rateLostN + " 次警報" + (carried ? "，中間重新整理或重新開始過監聽" : "") + "）");
-        rateLostAt = 0; rateLostN = 0;
+        rateLostAt = 0; rateLostN = 0; rateAns = "";
       } else if (!rateLostAt && (r === 48000 || r < 40000)) {
-        rateLostAt = Date.now(); rateLostN = 0; rateFrom = resetRate; rateSeen = false;
+        rateLostAt = Date.now(); rateLostN = 0; rateFrom = resetRate; rateSeen = false; rateAns = "";
       }
       if (rateLostAt) rateTo = r;
       resetRateN = 0;
@@ -2163,7 +2178,7 @@
     if (!rateLostAt) return;
     logEvent("🔧 你確認聲音是從喇叭出來的（取樣率 " + (rateTo || resetRate) + "Hz）——之後把它當成這台喇叭的正常值，紅框收起（掛了 "
       + fmtDry(Date.now() - rateLostAt) + "，期間 " + rateLostN + " 次警報）");
-    rateLostAt = 0; rateLostN = 0;
+    rateLostAt = 0; rateLostN = 0; rateAns = "";
     saveOutRate(); paintRate();
   }
   function paintRate() {
@@ -2177,20 +2192,34 @@
       // v125：使用者確認 10/31 那一次是「改從手機出來」，不是 10/27 那樣完全沒聲音。
       // 舊的說明寫「都正常卻還是沒聲音，就按下面這顆」——可是那時明明有聲音（從手機），
       // 照字面讀就不知道該不該按。兩種情況的分岔點其實是藍牙設定裡那台喇叭的狀態（使用說明早就這樣寫）
-      + "10/31 晚上就是這樣，之後的音樂改從手機出來；10/27 下午更糟，喇叭和手機都完全沒聲音。"
+      // v127：11/04 那一次使用者確認「重新整理三次之後，聲音還是沒有回到喇叭」——
+      // 全新的頁面、全新的元素照樣從手機出來，所以問題不在網頁裡面，重新整理不再列為解法
+      + "10/31、11/04 都是這樣，之後的音樂改從手機出來（11/04 重新整理網頁也沒有用）；10/27 更糟，喇叭和手機都完全沒聲音。"
       + (rateLostN ? "之後已有 <b>" + rateLostN + " 次</b>警報。" : "")
-      + "<br><b>先看 iPhone「設定 → 藍牙」裡這台喇叭：</b>"
-      + "<br>・顯示「<b>未連線</b>」：喇叭斷了或睡著了——把喇叭打開、在藍牙設定裡重新連上（按網頁的按鈕沒有用）"
-      + "<br>・顯示「<b>已連線</b>」：是網頁這邊卡住了——按下面這顆「🔈 重新取得喇叭」（不必重新整理網頁），還是不行再重新整理"
+      + "<br><b>請打開 iPhone「設定 → 藍牙」，看這台喇叭顯示什麼，再按下面對應的按鈕：</b></span>"
+      + "<button data-bt='off' style='margin-top:8px" + (rateAns === "off" ? ";border-color:var(--accent);font-weight:700" : "") + "'>"
+      + (rateAns === "off" ? "● " : "") + "顯示「未連線」</button> "
+      + "<button data-bt='on' style='margin-top:8px" + (rateAns === "on" ? ";border-color:var(--accent);font-weight:700" : "") + "'>"
+      + (rateAns === "on" ? "● " : "") + "顯示「已連線」</button>"
+      + (rateAns === "off"
+        ? "<span class='hint' style='display:block;margin-top:8px'>喇叭斷了或睡著了，網頁這邊救不回來：<br>① 把喇叭打開（沒電就先充電）"
+          + "<br>② 在「設定 → 藍牙」點這台喇叭，等它變成「已連線」</span>"
+        : rateAns === "on"
+        ? "<span class='hint' style='display:block;margin-top:8px'>藍牙還連著，聲音卻被送到手機：<br>① 按下面這顆「🔈 重新取得喇叭」"
+          + "<br>② 還是從手機出來：從螢幕右上角往下滑打開控制中心，點音樂那一格右上角的 AirPlay 圖示（三角形加圓圈），選這台喇叭"
+          + "<br>③ 再不行：把喇叭關掉再打開，等它自己連回來</span>"
+          + "<button data-respeak style='margin-top:8px'>🔈 重新取得喇叭</button>"
+        : "")
       // v126：不再「碰一下就消失」（見 OUT_KEY 的註解）
-      + "<br>這則提示會一直留著，等網頁看到聲音回到喇叭才自己收起（下一次播完音樂時會再確認一次，重新整理也不會忘）。"
+      + "<span class='hint' style='display:block;margin-top:8px'>這則提示會一直留著，等網頁看到聲音回到喇叭才自己收起（下一次播完音樂時會再確認一次，重新整理也不會忘）。"
       + "如果聲音其實是從喇叭出來的，請按「✓ 聲音是從喇叭出來的」。</span>"
-      + "<button data-respeak style='margin-top:8px'>🔈 重新取得喇叭</button> "
       + "<button data-rateok style='margin-top:8px'>✓ 聲音是從喇叭出來的</button>";
   }
   $("rateWarn").addEventListener("click", e => {
     if (!e.target.closest) return;
-    if (e.target.closest("[data-respeak]")) respeaker();
+    const bt = e.target.closest("[data-bt]");
+    if (bt) rateAnswer(bt.getAttribute("data-bt"));
+    else if (e.target.closest("[data-respeak]")) respeaker();
     else if (e.target.closest("[data-rateok]")) rateOK();
   });
   let resetting = false;

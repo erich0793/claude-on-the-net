@@ -13,6 +13,10 @@
 // ⑦ 重新整理網頁：一樣接續；「✓ 聲音是從喇叭出來的」收起紅框，之後 48000 不再示警，48000→44100 只寫紀錄不示警
 // ⑧ 上一次監聽最後是 44100、這一次第一次重建就是 48000：也要示警（以前沒有東西可比）
 // ⑨ 重新整理之後第一次重建就回到 44100：自動收起，紀錄說出中間重新整理過
+// v127：紅框直接問「藍牙設定裡喇叭顯示什麼」，按了就寫進紀錄（11/04 事後問，使用者已想不起來）。
+// ④ 先按「顯示已連線」：寫一行回報，並出現「🔈 重新取得喇叭」與控制中心的步驟
+// ⑤ 改按「顯示未連線」：寫一行（說出原本選的是什麼），換成「網頁這邊救不回來」的步驟
+// ⑦ 回答過之後重新整理：紅框掛回來時記得剛才選的是哪一個
 const { openPage, loadTone, log, since, entries, pick, fakeMic } = require('./_common');
 const PAGE = process.env.PAGE || 'http://127.0.0.1:8123/__mc.html';
 const rate = () => {
@@ -60,6 +64,16 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   await alertOnce(page);
   await page.waitForTimeout(2500);
   b = await banner(page);
+  // v127：先回答藍牙顯示「已連線」，「🔈 重新取得喇叭」才出現
+  const ask = !!(await page.$('#rateWarn [data-bt="on"]')) && !!(await page.$('#rateWarn [data-bt="off"]'));
+  let b4a = { text: '' }, rep4 = '';
+  if (ask) {
+    const bq = await log(page);
+    await page.click('#rateWarn [data-bt="on"]'); await page.waitForTimeout(300);
+    b4a = await banner(page); rep4 = pick(since(await log(page), bq), /紅框回報：iPhone 藍牙設定裡喇叭顯示「已連線」/);
+  }
+  console.log('④ 紅框問藍牙顯示什麼（兩顆按鈕）=', ask ? '✅' : '❌', '｜按「已連線」寫進紀錄 =', rep4 ? '✅ ' + rep4.slice(9, 50) : '❌',
+    '｜出現控制中心的步驟 =', /控制中心/.test(b4a.text) && /AirPlay/.test(b4a.text) ? '✅' : '❌');
   before = await log(page);
   await page.evaluate(() => { window.__rate = 44100; });
   const hasBtn = !!(await page.$('#rateWarn [data-respeak]'));
@@ -68,7 +82,7 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   const re = await untilLine(page, before, /已重新取得喇叭/, 8000);
   await untilLine(page, before, /音訊已重建，恢復監聽/, 15000); await page.waitForTimeout(500);
   const b4 = await banner(page);
-  console.log('④ 紅框裡有「重新取得喇叭」=', hasBtn ? '✅' : '❌', '｜按下去紅框沒有被收掉 =', b.shown && stillUp ? '✅' : '❌',
+  console.log('   紅框裡有「重新取得喇叭」=', hasBtn ? '✅' : '❌', '｜按下去紅框沒有被收掉 =', b.shown && stillUp ? '✅' : '❌',
     '｜真的重新取得了 =', re ? '✅' : '❌', '｜回到 44100 後自動收起 =', !b4.shown && !b4.missing ? '✅' : '❌');
 
   // ⑤ 碰畫面其他地方：不收起
@@ -85,6 +99,17 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   console.log('⑤ 碰畫面其他地方兩下：紅框留著 =', b5.shown ? '✅' : '❌ 收起來了', '｜「已有人看到」只記一次 =', seenN.length - s0 === 1 ? '✅ ' + seenN[0].slice(9, 60) : '❌ ' + (seenN.length - s0) + ' 行');
   const okBtn = !!(await page.$('#rateWarn [data-rateok]'));
   console.log('   紅框裡有「✓ 聲音是從喇叭出來的」=', okBtn ? '✅' : '❌');
+  let bq = await log(page);
+  if (await page.$('#rateWarn [data-bt="off"]')) await page.click('#rateWarn [data-bt="off"]');
+  await page.waitForTimeout(300);
+  let b5b = await banner(page), r5 = pick(since(await log(page), bq), /紅框回報：.*「未連線」/);
+  console.log('   按「未連線」：寫進紀錄 =', r5 && !/原本選的是/.test(r5) ? '✅' : '❌ ' + (r5 || '沒有').slice(9, 60),
+    '｜換成「網頁這邊救不回來」的步驟 =', /網頁這邊救不回來/.test(b5b.text) && !/控制中心/.test(b5b.text) ? '✅' : '❌');
+  bq = await log(page);
+  if (await page.$('#rateWarn [data-bt="on"]')) await page.click('#rateWarn [data-bt="on"]');
+  await page.waitForTimeout(300);
+  r5 = pick(since(await log(page), bq), /紅框回報：.*「已連線」/);
+  console.log('   改按「已連線」：紀錄說出原本選的是「未連線」=', /原本選的是「未連線」/.test(r5) ? '✅' : '❌ ' + (r5 || '沒有').slice(9, 60));
 
   // ⑥ 停止再開始監聽：接續
   await page.click('#stopBtn'); await page.waitForTimeout(1500);
@@ -107,6 +132,8 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   await page.evaluate(() => { window.__rate = 48000; });
   await alertOnce(page);
   const t7 = (await banner(page)).text.slice(0, 14);
+  if (await page.$('#rateWarn [data-bt="on"]')) await page.click('#rateWarn [data-bt="on"]'); // v127：回答過再重新整理
+  await page.waitForTimeout(300);
   await page.reload(); await page.waitForTimeout(2500);
   await page.evaluate(() => document.querySelectorAll('.pane').forEach(x => { x.hidden = false; }));
   await page.click('#startBtn'); await page.waitForTimeout(5000);
@@ -117,6 +144,7 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   let b7 = await banner(page);
   console.log('⑦ 重新整理之後：還沒重建時先不掛 =', !b7a.shown ? '✅' : '❌', '｜第一次重建仍是 48000：紅框掛回來 =', b7.shown ? '✅' : '❌',
     '｜時刻沿用重新整理之前的 =', b7.text.slice(0, 14) === t7 ? '✅ ' + t7 : '❌ ' + b7.text.slice(0, 14) + ' ≠ ' + t7);
+  console.log('   記得重新整理之前選的「已連線」=', /● 顯示「已連線」/.test(b7.text) ? '✅' : '❌');
   before = await log(page);
   if (await page.$('#rateWarn [data-rateok]')) await page.click('#rateWarn [data-rateok]');
   await page.waitForTimeout(500);
