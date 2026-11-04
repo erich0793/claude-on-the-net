@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v125</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v126</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1702,12 +1702,12 @@
         + "，期間 " + routeLostN + " 次警報）");
       routeLostAt = 0; routeLostN = 0; paintRoute();
     }
-    // v123：同一套作法收起「聲音送去的裝置換了」——但按的是提示裡那顆按鈕時不收（要讓它按得到）
-    const inRate = ev && ev.target && ev.target.closest && ev.target.closest("#rateWarn");
-    if (rateLostAt && !inRate && Date.now() - rateLostAt > 2000) {
+    // 「聲音送去的裝置換了」：v126 起碰畫面不再收起（碰畫面不會讓聲音回到喇叭，見 OUT_KEY 的註解），
+    // 只記下「第一次有人碰畫面」的時刻——紅框掛了多久才被看到，仍然是這段退化最重要的一個數字
+    if (rateLostAt && running && !rateCarry && !rateSeen && Date.now() - rateLostAt > 2000) {
+      rateSeen = true;
       logEvent("🔧 已有人看到「聲音送去的裝置換了」提示（掛了 " + fmtDry(Date.now() - rateLostAt)
-        + "，期間 " + rateLostN + " 次警報）");
-      rateLostAt = 0; rateLostN = 0; paintRate();
+        + "，期間 " + rateLostN + " 次警報）——紅框留著，等聲音回到喇叭");
     }
     // 只在真的快見底時才補（過去只要少一顆就補，等於每次碰畫面都來一次
     // 建立＋播放的突發負載）；平時有熱身元素兜底，不急著補滿。
@@ -1894,8 +1894,9 @@
     startBtn.disabled = true; stopBtn.disabled = false;
     setStatus("listening", "監聽中…", "偵測到疑似嬰兒哭聲將自動播放音檔");
     deafRuns = 0; // 「全滅了幾分鐘」是這一次監聽的數字，不該跨越停止／重新開始
-    resetRate = 0; resetRateN = 0; // 取樣率的比較也以「本次監聽」為範圍（開始監聽那一刻的引擎是在錄音中建的，不算）
-    rateLostAt = 0; rateLostN = 0;  // 重新開始監聽＝重新起算，上一次監聽的提示一起收掉
+    // v126：取樣率的比較接續上一次監聽（重新整理也一樣，見 OUT_KEY）。開始監聽那一刻的引擎是在錄音中建的，
+    // 照舊不算——上一次的「聲音不在喇叭」先記著不掛，等這一次第一次重建確認了再說
+    loadOutRate();
     // 開始監聽時沒有可信的前值，首次校準必須放手學習房間真正的背景
     floorAtOff = null; clampLogged = 0;
     watchOpen(); // 時間表的底色：記下「從這一刻開始有在聽」
@@ -2104,28 +2105,72 @@
   // 5 週紀錄裡同一次監聽中重建取樣率改變只有這一次（0 次誤報）。
   // 方向：iPhone 本機輸出是 48000；換成 48000（或通話等級的低取樣率）才示警，換回原本的就自動收起
   let rateLostAt = 0, rateLostN = 0, rateFrom = 0, rateTo = 0;
+  // v126：紅框要掛到聲音回到喇叭為止。v123 有兩個設計，在真機上都讓它太早消失：
+  // ① 碰一下畫面就收起。11/04 19:47:06 使用者第一次碰畫面，紅框就不見了——v125 才寫進去的
+  //    「已連線就按下面這顆」連同那顆按鈕一起消失，接下來 50 秒裡重新整理了三次（沒有按到那顆）。
+  //    10/31 也是碰第二下就收掉了。碰畫面不會讓聲音回到喇叭，收起來只是把唯一的指引藏掉
+  // ② 只在「同一次監聽」裡比。重新整理、重新開始監聽就從頭算：11/04 重新整理之後，網頁就忘了
+  //    剛才的聲音沒有從喇叭出來；11/01～11/02 那一次監聽從頭到尾 51 次重建都是 48000——
+  //    前一晚 10/31 19:48 起就已經是 48000，重新整理之後的這一次沒有東西可以比，37 小時一次提示都沒有
+  // 現在：最近一次重建的取樣率、以及「聲音不在喇叭」這件事本身存在本機，下一次監聽接著比
+  //（開始監聽那一刻的引擎是在錄音中建的，照舊不算——要等第一次重建才知道，在那之前紅框先不掛）。
+  // 收起只有三條路：取樣率換回原本的（自動）、按「✓ 聲音是從喇叭出來的」（把現在的取樣率當成正常值——
+  // 也是第一個「48000 其實是喇叭」的證據來源）、停止監聽（只是不顯示，記憶還在）
+  const OUT_KEY = "outRate";
+  let rateCarry = false, rateSeen = false; // rateCarry：記憶是從上一次監聽帶來的，這一次還沒重建過
+  function saveOutRate() {
+    try { localStorage.setItem(OUT_KEY, JSON.stringify({ r: resetRate, lost: rateLostAt, from: rateFrom, to: rateTo, n: rateLostN })); } catch (e) {}
+  }
+  function loadOutRate() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(OUT_KEY) || "null"); } catch (e) {}
+    resetRate = (s && +s.r) || 0; resetRateN = 0;
+    rateLostAt = (s && +s.lost) || 0; rateLostN = (s && +s.n) || 0;
+    rateFrom = (s && +s.from) || 0; rateTo = (s && +s.to) || 0;
+    rateCarry = !!resetRate; rateSeen = false;
+  }
+  // 紅框上的時刻：不是今天的要連日期一起寫（記憶會跨過重新整理、跨過一夜）
+  function rateWhen(t) {
+    const d = new Date(t), p = n => String(n).padStart(2, "0"), hm = p(d.getHours()) + ":" + p(d.getMinutes());
+    return new Date().toDateString() === d.toDateString() ? hm : (d.getMonth() + 1) + "/" + p(d.getDate()) + " " + hm;
+  }
   function noteResetRate(r) {
+    const carried = rateCarry;
+    rateCarry = false;
     if (resetRate && r !== resetRate) {
-      logEvent("🔬 這次重建的取樣率是 " + r + "Hz，前 " + resetRateN + " 次都是 " + resetRate + "Hz——"
-        + "音訊輸出裝置可能換了（例如藍牙喇叭斷線，聲音改從手機出來；或重新連上）");
+      logEvent("🔬 這次重建的取樣率是 " + r + "Hz，" + (resetRateN ? "前 " + resetRateN + " 次都是 " : "重新整理或重新開始監聽之前最後是 ")
+        + resetRate + "Hz——音訊輸出裝置可能換了（例如藍牙喇叭斷線，聲音改從手機出來；或重新連上）");
       if (rateLostAt && r === rateFrom) {
         logEvent("🔧 輸出裝置換回來了（取樣率回到 " + r + "Hz）——「聲音送去的裝置換了」提示自動收起（掛了 "
-          + fmtDry(Date.now() - rateLostAt) + "，期間 " + rateLostN + " 次警報）");
+          + fmtDry(Date.now() - rateLostAt) + "，期間 " + rateLostN + " 次警報" + (carried ? "，中間重新整理或重新開始過監聽" : "") + "）");
         rateLostAt = 0; rateLostN = 0;
       } else if (!rateLostAt && (r === 48000 || r < 40000)) {
-        rateLostAt = Date.now(); rateLostN = 0; rateFrom = resetRate;
+        rateLostAt = Date.now(); rateLostN = 0; rateFrom = resetRate; rateSeen = false;
       }
       if (rateLostAt) rateTo = r;
-      paintRate();
       resetRateN = 0;
+    } else if (carried && rateLostAt) {
+      logEvent("🔬 重新整理或重新開始監聽之後第一次重建，取樣率仍是 " + r + "Hz——聲音還沒有回到喇叭（"
+        + rateWhen(rateLostAt) + " 起，之後已有 " + rateLostN + " 次警報），紅框接著掛");
     }
     resetRate = r; resetRateN++;
+    saveOutRate();
+    paintRate();
+  }
+  // 「✓ 聲音是從喇叭出來的」：把現在的取樣率當成這台喇叭的正常值。這一行是真機上的對照答案——
+  // 至今兩次（10/27、10/31）都證實 48000＝不是喇叭；有人按這顆，就是第一次反例
+  function rateOK() {
+    if (!rateLostAt) return;
+    logEvent("🔧 你確認聲音是從喇叭出來的（取樣率 " + (rateTo || resetRate) + "Hz）——之後把它當成這台喇叭的正常值，紅框收起（掛了 "
+      + fmtDry(Date.now() - rateLostAt) + "，期間 " + rateLostN + " 次警報）");
+    rateLostAt = 0; rateLostN = 0;
+    saveOutRate(); paintRate();
   }
   function paintRate() {
     const el = $("rateWarn");
     if (!el) return;
-    if (!running || !rateLostAt) { el.hidden = true; return; }
-    const d = new Date(rateLostAt), hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    if (!running || !rateLostAt || rateCarry) { el.hidden = true; return; }
+    const hm = rateWhen(rateLostAt);
     el.hidden = false;
     el.innerHTML = "🔇 <b>" + hm + " 那一輪播完，聲音送去的裝置換了——音樂可能沒有從藍牙喇叭出來</b>"
       + "<span class='hint' style='display:block'>網頁看到音訊輸出的規格從 " + rateFrom + " 變成 " + rateTo + "。"
@@ -2136,11 +2181,18 @@
       + (rateLostN ? "之後已有 <b>" + rateLostN + " 次</b>警報。" : "")
       + "<br><b>先看 iPhone「設定 → 藍牙」裡這台喇叭：</b>"
       + "<br>・顯示「<b>未連線</b>」：喇叭斷了或睡著了——把喇叭打開、在藍牙設定裡重新連上（按網頁的按鈕沒有用）"
-      + "<br>・顯示「<b>已連線</b>」：是網頁這邊卡住了——按下面這顆（不必重新整理網頁），還是不行再重新整理"
-      + "<br>看過之後<b>碰一下畫面其他地方</b>，這則提示就會消失。</span>"
-      + "<button data-respeak style='margin-top:8px'>🔈 重新取得喇叭</button>";
+      + "<br>・顯示「<b>已連線</b>」：是網頁這邊卡住了——按下面這顆「🔈 重新取得喇叭」（不必重新整理網頁），還是不行再重新整理"
+      // v126：不再「碰一下就消失」（見 OUT_KEY 的註解）
+      + "<br>這則提示會一直留著，等網頁看到聲音回到喇叭才自己收起（下一次播完音樂時會再確認一次，重新整理也不會忘）。"
+      + "如果聲音其實是從喇叭出來的，請按「✓ 聲音是從喇叭出來的」。</span>"
+      + "<button data-respeak style='margin-top:8px'>🔈 重新取得喇叭</button> "
+      + "<button data-rateok style='margin-top:8px'>✓ 聲音是從喇叭出來的</button>";
   }
-  $("rateWarn").addEventListener("click", e => { if (e.target.closest && e.target.closest("[data-respeak]")) respeaker(); });
+  $("rateWarn").addEventListener("click", e => {
+    if (!e.target.closest) return;
+    if (e.target.closest("[data-respeak]")) respeaker();
+    else if (e.target.closest("[data-rateok]")) rateOK();
+  });
   let resetting = false;
   async function deepAudioReset() {
     if (resetting) return;
@@ -3219,7 +3271,7 @@
       }
       el._inUse = true; // 同步標記，讓未完成的解鎖流程放手
       if (routeLostAt) routeLostN++;
-      if (rateLostAt) { rateLostN++; paintRate(); }
+      if (rateLostAt) { rateLostN++; saveOutRate(); paintRate(); } // v126：次數也要記得住（重新整理之後接著算）
       paintPool();      // 池是在這裡被消耗的，畫面要當場跟上
       if (el !== player && !el._real) { el.src = player.src; el._real = true; } // 解鎖還沒換源就當場換
       // 「元素在前進」抓不到的另一種無聲：**播的是對的檔案嗎？音量對嗎？**

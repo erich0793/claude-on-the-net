@@ -6,8 +6,13 @@
 // ② 變成 48000：寫一行，並掛上紅框（說出從幾變成幾）；之後的警報要算進去
 // ③ 變回 44100：寫一行，紅框自動收起
 // ④ 紅框裡的「🔈 重新取得喇叭」按得到（按它不會把紅框收掉），重建之後回到 44100 就自動收起
-// ⑤ 碰畫面其他地方：收起，並記下掛了多久
-// ⑥ 停止再開始監聽：重新起算，第一次重建不跟上一次監聽比；48000 換成 44100 不示警（那是接回喇叭的方向）
+// v126：紅框要掛到聲音回到喇叭為止。11/04 19:47:06 使用者第一次碰畫面紅框就消失了（連同 v125 要他按的那顆按鈕），
+// 之後重新整理三次，網頁就忘了聲音不在喇叭；11/01～11/02 整次監聽 51 次重建都是 48000（前一晚就是了），一次提示都沒有。
+// ⑤ 碰畫面其他地方：紅框留著，只記一次「已有人看到」（碰第二下不再記）
+// ⑥ 停止再開始監聽：記憶接續——開始監聽後先不掛（還沒重建過），第一次重建仍是 48000 就掛回來；之後換回 44100 自動收起
+// ⑦ 重新整理網頁：一樣接續；「✓ 聲音是從喇叭出來的」收起紅框，之後 48000 不再示警，48000→44100 只寫紀錄不示警
+// ⑧ 上一次監聽最後是 44100、這一次第一次重建就是 48000：也要示警（以前沒有東西可比）
+// ⑨ 重新整理之後第一次重建就回到 44100：自動收起，紀錄說出中間重新整理過
 const { openPage, loadTone, log, since, entries, pick, fakeMic } = require('./_common');
 const PAGE = process.env.PAGE || 'http://127.0.0.1:8123/__mc.html';
 const rate = () => {
@@ -66,28 +71,84 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   console.log('④ 紅框裡有「重新取得喇叭」=', hasBtn ? '✅' : '❌', '｜按下去紅框沒有被收掉 =', b.shown && stillUp ? '✅' : '❌',
     '｜真的重新取得了 =', re ? '✅' : '❌', '｜回到 44100 後自動收起 =', !b4.shown && !b4.missing ? '✅' : '❌');
 
-  // ⑤ 碰畫面其他地方
+  // ⑤ 碰畫面其他地方：不收起
   await page.evaluate(() => { window.__rate = 48000; });
   await alertOnce(page);
   await page.waitForTimeout(2500);
-  before = await log(page);
+  // 用整份紀錄前後相減：點左上角會切換分頁，紀錄區被藏起來時 innerText 沒有換行，since() 會對不上
+  const seenAll = async () => entries(await log(page)).filter(l => /已有人看到「聲音送去的裝置換了」提示/.test(l));
+  const s0 = (await seenAll()).length;
   await page.mouse.click(5, 5); await page.waitForTimeout(500);
-  const b5 = await banner(page);
-  const seen = pick(since(await log(page), before), /已有人看到「聲音送去的裝置換了」提示/);
-  console.log('⑤ 碰畫面其他地方：收起 =', !b5.shown && !b5.missing ? '✅' : '❌', '｜紀錄', seen ? '✅ ' + seen.slice(9, 60) : '❌');
+  await page.mouse.click(5, 5); await page.waitForTimeout(500);
+  await page.evaluate(() => document.querySelectorAll('.pane').forEach(x => { x.hidden = false; }));
+  const b5 = await banner(page), seenN = await seenAll();
+  console.log('⑤ 碰畫面其他地方兩下：紅框留著 =', b5.shown ? '✅' : '❌ 收起來了', '｜「已有人看到」只記一次 =', seenN.length - s0 === 1 ? '✅ ' + seenN[0].slice(9, 60) : '❌ ' + (seenN.length - s0) + ' 行');
+  const okBtn = !!(await page.$('#rateWarn [data-rateok]'));
+  console.log('   紅框裡有「✓ 聲音是從喇叭出來的」=', okBtn ? '✅' : '❌');
 
-  // ⑥ 重新開始監聽
+  // ⑥ 停止再開始監聽：接續
   await page.click('#stopBtn'); await page.waitForTimeout(1500);
-  await page.evaluate(() => { window.__rate = 48000; });
   await page.click('#startBtn'); await page.waitForTimeout(5000);
+  const b6a = await banner(page);
   before = await log(page);
+  await page.evaluate(() => { window.__rate = 48000; });
   await alertOnce(page);
-  n = notes(since(await log(page), before));
+  let a6 = since(await log(page), before), b6 = await banner(page);
+  const still6 = pick(a6, /之後第一次重建，取樣率仍是 48000Hz/);
+  console.log('⑥ 重新開始監聽：還沒重建時先不掛 =', !b6a.shown ? '✅' : '❌', '｜第一次重建仍是 48000：紀錄', still6 ? '✅ ' + still6.slice(9, 60) : '❌ 沒有',
+    '｜紅框掛回來 =', b6.shown ? '✅' : '❌');
+  before = await log(page);
   await page.evaluate(() => { window.__rate = 44100; });
   await alertOnce(page);
-  const n6 = notes(since(await log(page), before)); const b6 = await banner(page);
-  console.log('⑥ 重新開始監聽後第一次重建（48000）：🔬 行數 =', n.length, n.length === 0 ? '✅ 重新起算' : '❌',
-    '｜接著 48000→44100：寫 🔬 但不掛紅框 =', n6.length === 1 && !b6.shown ? '✅' : '❌');
+  b6 = await banner(page);
+  console.log('   接著回到 44100：自動收起 =', !b6.shown && !b6.missing ? '✅' : '❌', '｜紀錄 =', /輸出裝置換回來了/.test(since(await log(page), before)) ? '✅' : '❌');
+
+  // ⑦ 重新整理網頁：接續；然後按「✓ 聲音是從喇叭出來的」
+  await page.evaluate(() => { window.__rate = 48000; });
+  await alertOnce(page);
+  const t7 = (await banner(page)).text.slice(0, 14);
+  await page.reload(); await page.waitForTimeout(2500);
+  await page.evaluate(() => document.querySelectorAll('.pane').forEach(x => { x.hidden = false; }));
+  await page.click('#startBtn'); await page.waitForTimeout(5000);
+  const b7a = await banner(page);
+  before = await log(page);
+  await page.evaluate(() => { window.__rate = 48000; });
+  await alertOnce(page);
+  let b7 = await banner(page);
+  console.log('⑦ 重新整理之後：還沒重建時先不掛 =', !b7a.shown ? '✅' : '❌', '｜第一次重建仍是 48000：紅框掛回來 =', b7.shown ? '✅' : '❌',
+    '｜時刻沿用重新整理之前的 =', b7.text.slice(0, 14) === t7 ? '✅ ' + t7 : '❌ ' + b7.text.slice(0, 14) + ' ≠ ' + t7);
+  before = await log(page);
+  if (await page.$('#rateWarn [data-rateok]')) await page.click('#rateWarn [data-rateok]');
+  await page.waitForTimeout(500);
+  b7 = await banner(page);
+  const ok7 = pick(since(await log(page), before), /你確認聲音是從喇叭出來的/);
+  console.log('   按「✓ 聲音是從喇叭出來的」：收起 =', !b7.shown && !b7.missing ? '✅' : '❌', '｜紀錄', ok7 ? '✅ ' + ok7.slice(9, 50) : '❌');
+  before = await log(page);
+  await alertOnce(page);                                         // 仍是 48000
+  await page.evaluate(() => { window.__rate = 44100; });
+  await alertOnce(page);                                         // 48000 → 44100
+  const a7 = since(await log(page), before); b7 = await banner(page);
+  console.log('   之後 48000 不再示警、48000→44100 只寫紀錄 =', !b7.shown && notes(a7).length === 1 ? '✅' : '❌ 🔬 ' + notes(a7).length + ' 行、紅框 ' + b7.shown);
+
+  // ⑧ 上一次監聽最後是 44100，這一次第一次重建就是 48000
+  await page.click('#stopBtn'); await page.waitForTimeout(1500);
+  await page.click('#startBtn'); await page.waitForTimeout(5000);
+  before = await log(page);
+  await page.evaluate(() => { window.__rate = 48000; });
+  await alertOnce(page);
+  const n8 = notes(since(await log(page), before)), b8 = await banner(page);
+  console.log('⑧ 跨監聽 44100→48000：🔬', n8.length === 1 && /之前最後是 44100Hz/.test(n8[0]) ? '✅ ' + n8[0].slice(9, 60) : '❌ ' + (n8[0] || '沒有').slice(0, 60),
+    '｜紅框 =', b8.shown ? '✅' : '❌');
+
+  // ⑨ 重新整理之後第一次重建就回到 44100
+  await page.reload(); await page.waitForTimeout(2500);
+  await page.evaluate(() => document.querySelectorAll('.pane').forEach(x => { x.hidden = false; }));
+  await page.click('#startBtn'); await page.waitForTimeout(5000);
+  before = await log(page);
+  await alertOnce(page);                                         // 重新整理後 __rate 是 44100
+  const back9 = pick(since(await log(page), before), /輸出裝置換回來了/), b9 = await banner(page);
+  console.log('⑨ 重新整理後回到 44100：自動收起 =', !b9.shown && !b9.missing ? '✅' : '❌', '｜紀錄說出中間重新整理過 =',
+    /中間重新整理或重新開始過監聽/.test(back9) ? '✅' : '❌ ' + (back9 || '沒有').slice(0, 60));
   console.log('errors:', errors.length ? errors.join('\n') : '（無）');
   await browser.close();
 })().catch(e => { console.error('FATAL', e); process.exit(1); });

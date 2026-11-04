@@ -11,7 +11,13 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(dirname "$HERE")"
 SRC="${1:-$ROOT/index.html}"; ONLY="${2:-}"
-export NODE_PATH="${NODE_PATH:-$(npm root -g)/playwright/node_modules}"
+# playwright-core 的位置會隨容器映像變（11/04 起在 /opt/node-tools）：沒指定就找一個真的有它的地方
+if [ -z "${NODE_PATH:-}" ]; then
+  for d in "$(npm root -g)/playwright/node_modules" /opt/node-tools/node_modules "$(npm root -g)"; do
+    [ -d "$d/playwright-core" ] && { NODE_PATH="$d"; break; }
+  done
+fi
+export NODE_PATH
 curl -s -o /dev/null http://127.0.0.1:8123/ || { (cd "$ROOT" && setsid nohup python3 -m http.server 8123 >/dev/null 2>&1 < /dev/null &); sleep 2; }
 # 探針 → 它用的測試副本
 PROBES="pulsephase:ps pulsesmoke:ps keephealth:ps srcerror:sr watchbase:dy dry:dy micstorm:mc michang:mc perm:mc yield:mc unlockmute:mc bgflood:bg rate:mc stuckscope:mc startretry:mc runbeat:mc
