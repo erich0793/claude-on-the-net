@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v127</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v128</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2134,6 +2134,7 @@
     rateFrom = (s && +s.from) || 0; rateTo = (s && +s.to) || 0;
     rateAns = (s && rateLostAt && (s.a === "on" || s.a === "off")) ? s.a : "";
     rateCarry = !!resetRate; rateSeen = false;
+    outSeen = resetRate; pulseRateLogs = 0; // v128
   }
   function rateAnswer(v) {
     if (!rateLostAt || v === rateAns) return;
@@ -2169,8 +2170,33 @@
         + rateWhen(rateLostAt) + " 起，之後已有 " + rateLostN + " 次警報），紅框接著掛");
     }
     resetRate = r; resetRateN++;
+    outSeen = r; // v128：脈衝時量到的拿它來比
     saveOutRate();
     paintRate();
+  }
+  // v128：保連脈衝那幾秒麥克風也是關的——跟深度重置一樣，可以順便量「此刻聲音送去的裝置」。
+  // 11/10 兩次紅框，使用者當場回報藍牙都顯示「未連線」：是喇叭自己斷的，不是網頁。
+  // 可是重建只發生在播完音樂之後，斷線的時刻只框得出「兩次警報之間」——那兩次分別是 66 分鐘、
+  // 111 分鐘的空窗（10/31 那次只有 8 分鐘），分不出是「靜下來 N 分鐘就自動關機」還是「播到一半斷的」
+  //（沒電、距離、干擾）。每 4 分鐘量一次就分得出來。
+  // 這個量法在真機上還沒驗證過（錄音用的引擎此時只是暫停、沒有關掉），所以先只寫紀錄，
+  // 紅框照舊以重建時的取樣率為準；跟下一次重建對得上，才拿它來提早掛紅框
+  let outSeen = 0, pulseRateLogs = 0;
+  function notePulseRate() {
+    let r = 0;
+    try {
+      const c = new (window.AudioContext || window.webkitAudioContext)();
+      r = c.sampleRate;
+      c.close().catch(() => {});
+    } catch (e) { return; }
+    if (!r) return;
+    if (outSeen && r !== outSeen && pulseRateLogs < 12) { // 量法若不穩會來回跳：一次監聽最多寫 12 行
+      pulseRateLogs++;
+      logEvent("🔬 保連脈衝時量到的輸出取樣率是 " + r + "Hz（前一次量到 " + outSeen + "Hz，距上次音樂 " + drySpell() + "）——"
+        + (r === 48000 || r < 40000 ? "喇叭可能在這幾分鐘裡斷線了" : "喇叭可能接回來了")
+        + (pulseRateLogs === 12 ? "（這一次監聽不再逐次記錄）" : ""));
+    }
+    outSeen = r;
   }
   // 「✓ 聲音是從喇叭出來的」：把現在的取樣率當成這台喇叭的正常值。這一行是真機上的對照答案——
   // 至今兩次（10/27、10/31）都證實 48000＝不是喇叭；有人按這顆，就是第一次反例
@@ -2201,6 +2227,12 @@
       + (rateAns === "off" ? "● " : "") + "顯示「未連線」</button> "
       + "<button data-bt='on' style='margin-top:8px" + (rateAns === "on" ? ";border-color:var(--accent);font-weight:700" : "") + "'>"
       + (rateAns === "on" ? "● " : "") + "顯示「已連線」</button>"
+      // v128：使用者兩次都是回答完 7～29 秒內就按了「停止」（11/10 08:59、11/11 00:11），
+      // 以為要按停止才會「回報」——結果 11/11 那一次半夜就停止監聽了。回答當下就寫進紀錄，什麼都不用再按
+      + (rateAns
+        ? "<span class='hint' style='display:block;margin-top:8px;color:var(--text)'>✓ 已經寫進紀錄了，<b>不用再按別的</b>。"
+          + "<b>不要按「停止」</b>——那會停止監聽。（複製紀錄時這個回答會一起帶到）</span>"
+        : "")
       + (rateAns === "off"
         ? "<span class='hint' style='display:block;margin-top:8px'>喇叭斷了或睡著了，網頁這邊救不回來：<br>① 把喇叭打開（沒電就先充電）"
           + "<br>② 在「設定 → 藍牙」點這台喇叭，等它變成「已連線」</span>"
@@ -2908,6 +2940,8 @@
       if (rider) rider.pause();
       keeper.pause();
       pulsing = false;
+      // v128：麥克風還關著、保連訊號也播完了——收回麥克風之前，量一下此刻聲音送去的裝置（只寫紀錄）
+      if (running && !alerting) notePulseRate();
       if (running && !alerting) recoverMic(true);
       // 麥克風回來之後才刷新授權（刷新本身不碰麥克風，但別和重連擠在一起）
       if (wantKeeperFresh) { wantKeeperFresh = false; setTimeout(() => refreshKeeper(POST_BLOCK), 2000); }
