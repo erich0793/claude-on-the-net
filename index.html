@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v128</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v129</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1261,6 +1261,7 @@
     // 播放中（不論試聽或警報）按下一律停止；警報的善後由 pause 事件處理
     const el = curEl();
     if (!el.paused) {
+      if (alerting) stopBtnAt = Date.now(); // v129：alertPaused 要分得出「按了停止鍵」與「剛好碰了畫面」
       el.pause(); el.currentTime = 0;
       // 媒體管線卡死時 pause 會被無視——重載頁面是唯一解，監聽中會自動恢復
       setTimeout(() => {
@@ -1507,13 +1508,49 @@
   // 警報播到一半被 pause：可能是使用者按的，也可能是 iOS 因為輸出路由改變（藍牙斷線）
   // 自己把媒體停掉的。兩者的處置一樣（停警報＋30 秒冷靜期），但**紀錄必須分得出來**——
   // 這是路由出事時唯一能事後追的線索
+  // v129：播放到一半有沒有停住。起播時的 verifyAudio 只看頭 3 秒、6 秒看門狗只管「一直沒開始」；
+  // 播到中途元素沒暫停、時間卻不走（沒有聲音，也沒有任何事件），以前完全看不到——
+  // 使用者聽不到了去按停止，紀錄只會寫「手動停止播放」。每 5 秒看一次 currentTime，
+  // 連續兩次沒前進就寫一行，恢復了也寫一行。開頭 10 秒留給起播的檢查，不重複報。先只寫紀錄
+  let progEl = null, progT = 0, progStuck = 0, progAt = 0;
+  setInterval(() => {
+    if (!alerting || Date.now() - alertBegunAt < 10000) { if (!alerting) progEl = null; return; }
+    const el = curEl();
+    if (!el || el.paused) { progEl = null; return; } // 暫停交給 alertPaused
+    const t = el.currentTime;
+    if (el !== progEl) { progEl = el; progT = t; progStuck = 0; return; }
+    const moving = t - progT > 0.5 || t < progT - 0.5; // 循環繞回開頭也算前進
+    progT = t;
+    if (moving) {
+      if (progStuck >= 2) logEvent("🔬 播放恢復前進了（停住約 " + Math.round((Date.now() - progAt) / 1000) + " 秒）");
+      progStuck = 0;
+      return;
+    }
+    if (++progStuck === 1) progAt = Date.now() - 5000;
+    if (progStuck === 2) logEvent("⚠️ 播放到一半停住了（" + elTag(el) + "｜停在 " + t.toFixed(1) + " 秒、已約 10 秒沒有前進"
+      + "｜readyState " + el.readyState + " networkState " + el.networkState + (el.error ? " error" + el.error.code : "")
+      + "｜播了 " + fmtDur((Date.now() - alertBegunAt) / 1000) + "，頁面在" + (document.visibilityState === "visible" ? "前景" : "背景")
+      + "）——這段時間沒有聲音");
+  }, 5000);
+  // v129：「手動」原本只看 2 秒內有沒有人碰畫面。11/12 10:23:12 一段 10 分鐘的手動播放在 4 分 38 秒停了，
+  // 紀錄寫「手動停止播放」，使用者卻說是自己停的（藍牙沒斷，再按一次播放又從喇叭出來）。
+  // 「按了停止鍵」和「剛好碰了畫面、同時被系統停掉」在舊紀錄裡長得一模一樣——要分開寫，
+  // 而且要帶上播了多久、頁面在前景還是背景（手動播放沒在監聽時，進出背景以前根本不記）
+  let stopBtnAt = 0;
   function alertPaused(el) {
     if (!alerting || curEl() !== el || el.ended) return;
-    const byUser = Date.now() - lastGestureAt < 2000;
+    const ago = Date.now() - lastGestureAt;
+    const byUser = ago < 2000, viaBtn = Date.now() - stopBtnAt < 2000;
+    const played = fmtDur((Date.now() - alertBegunAt) / 1000);
+    const where = document.visibilityState === "visible" ? "前景" : "背景";
+    // 停之前是不是已經沒聲音了（見下面的播放前進看門狗）：使用者常常是「聽不到了才去按停止」
+    const stalled = progEl === el && progStuck >= 2 ? "；停之前已約 " + Math.round((Date.now() - progAt) / 1000) + " 秒沒有前進（那段時間沒有聲音）" : "";
     stopAlert(true);
     cooldownUntil = performance.now() + 30000;
-    logEvent(byUser ? "手動停止播放，30 秒內暫不重新觸發"
-                    : "⚠️ 播放被系統中斷（沒有手勢，可能是音訊路由改變，例如藍牙斷線），30 秒內暫不重新觸發");
+    logEvent(!byUser ? "⚠️ 播放被系統中斷（沒有手勢，可能是音訊路由改變，例如藍牙斷線；播了 " + played + "，頁面在" + where + stalled + "），30 秒內暫不重新觸發"
+      : viaBtn ? "手動停止播放（按了「⏹ 停止播放」，播了 " + played + stalled + "），30 秒內暫不重新觸發"
+      : "🔬 手動停止播放？（" + (ago / 1000).toFixed(1) + " 秒前有人碰了畫面，但不是按「⏹ 停止播放」——也可能是系統剛好在這時停掉的；播了 "
+        + played + "，頁面在" + where + stalled + "），30 秒內暫不重新觸發");
     if (!byUser) { routeLostAt = Date.now(); routeLostN = 0; paintRoute(); }
     if (running) setStatus("listening", "監聽中…", byUser ? "已手動停止，30 秒內暫不重新觸發"
                                                           : "播放被系統中斷，30 秒內暫不重新觸發");
@@ -2478,6 +2515,8 @@
     loop(); // 由 loop 依當下前景／背景自行決定下一次的排程方式
   }
   document.addEventListener("visibilitychange", () => {
+    // v129：沒在監聽、正在手動播放時，進出背景以前不記——11/12 10:23 那次停的時候頁面在哪裡，事後查不到
+    if (!running && alerting) logEvent((document.visibilityState === "hidden" ? "進入背景" : "回到前景") + "（手動播放中，沒有在監聽）");
     if (running && document.visibilityState === "hidden") {
       logEvent("進入背景：偵測改由計時器驅動（每分鐘的「背景偵測運作中」心跳可驗證）");
       kickLoop();
