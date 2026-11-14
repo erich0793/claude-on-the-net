@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v129</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v130</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2172,6 +2172,7 @@
     rateAns = (s && rateLostAt && (s.a === "on" || s.a === "off")) ? s.a : "";
     rateCarry = !!resetRate; rateSeen = false;
     outSeen = resetRate; pulseRateLogs = 0; // v128
+    latSeen = null; latLogs = 0; // v130
   }
   function rateAnswer(v) {
     if (!rateLostAt || v === rateAns) return;
@@ -2219,14 +2220,34 @@
   // 這個量法在真機上還沒驗證過（錄音用的引擎此時只是暫停、沒有關掉），所以先只寫紀錄，
   // 紅框照舊以重建時的取樣率為準；跟下一次重建對得上，才拿它來提早掛紅框
   let outSeen = 0, pulseRateLogs = 0;
+  // v130：11/13 喇叭整天是 48000（中午使用者確認過聲音從喇叭出來），22:36～23:46 之間斷線，
+  // 手機本身也是 48000——取樣率完全沒變，紅框和脈衝量測都看不到，使用者手動播放才發現從手機出來。
+  // 藍牙輸出的延遲通常遠大於手機喇叭；把引擎回報的延遲（基本／輸出，有的才寫）也記下來，
+  // 看它在真機上分不分得出兩者。只寫紀錄：第一次量到寫一行，之後變動超過兩成才寫
+  const latOf = c => {
+    const ms = v => (typeof v === "number" && isFinite(v) && v > 0) ? Math.round(v * 10000) / 10 : 0;
+    let b = 0, o = 0;
+    try { b = ms(c.baseLatency); o = ms(c.outputLatency); } catch (e) {}
+    return { b, o, txt: (b ? "基本 " + b + "ms" : "") + (o ? (b ? "、" : "") + "輸出 " + o + "ms" : "") };
+  };
+  let latSeen = null, latLogs = 0;
+  function noteLat(l, r, where) {
+    if (!l.txt) return;
+    const far = (a, b) => a !== b && (!a || !b || Math.abs(a - b) / Math.max(a, b) > 0.2);
+    if (latSeen && !far(l.b, latSeen.b) && !far(l.o, latSeen.o)) return;
+    if (latLogs++ < 20) logEvent("🔬 " + where + "量到的輸出延遲：" + l.txt + (latSeen ? "（前一次 " + latSeen.txt + "）" : "")
+      + "｜取樣率 " + r + "Hz，距上次音樂 " + drySpell());
+    latSeen = l;
+  }
   function notePulseRate() {
-    let r = 0;
+    let r = 0, lat = null;
     try {
       const c = new (window.AudioContext || window.webkitAudioContext)();
-      r = c.sampleRate;
+      r = c.sampleRate; lat = latOf(c);
       c.close().catch(() => {});
     } catch (e) { return; }
     if (!r) return;
+    noteLat(lat, r, "保連脈衝時");
     if (outSeen && r !== outSeen && pulseRateLogs < 12) { // 量法若不穩會來回跳：一次監聽最多寫 12 行
       pulseRateLogs++;
       logEvent("🔬 保連脈衝時量到的輸出取樣率是 " + r + "Hz（前一次量到 " + outSeen + "Hz，距上次音樂 " + drySpell() + "）——"
@@ -2330,6 +2351,7 @@
       // 事後也查不到——08/16 16:15 重建後整整 30 分鐘偵測不出任何東西，就分不清
       // 是引擎劣化還是環境問題。加一個數字，這個問題以後永遠不必再猜
       noteResetRate(audioCtx.sampleRate);
+      noteLat(latOf(audioCtx), audioCtx.sampleRate, "重建時"); // v130
       logEvent("音訊已重建，恢復監聽（取樣率 " + audioCtx.sampleRate + "Hz）"
         + (audioCtx.sampleRate < 40000 ? "　⚠️ 取樣率劣化，偵測品質可能下降" : ""));
       if (running && !alerting) setStatus("listening", "監聽中…", "已回到偵測狀態");
