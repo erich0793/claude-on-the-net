@@ -48,6 +48,7 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   // v125：10/31 那次是「改從手機出來」，舊說明只寫「還是沒聲音就按」——有聲音時照字面讀不知道該不該按。
   // 分岔點是藍牙設定裡那台喇叭「已連線／未連線」，兩種都要說到
   console.log('   處置先看藍牙設定（「未連線」「已連線」分開說）=', /設定 → 藍牙/.test(b.text) && /未連線/.test(b.text) && /已連線/.test(b.text) ? '✅' : '❌');
+  console.log('   問的是「現在」（v131：隔天才看到的人以為在問當時）=', /「現在」打開/.test(b.text) && /不用回想/.test(b.text) ? '✅' : '❌');
   await alertOnce(page);
   b = await banner(page);
   console.log('   接著又一次警報：紅框算進去 =', /之後已有 1 次警報/.test(b.text) ? '✅' : '❌ ' + b.text.slice(0, 80));
@@ -144,7 +145,7 @@ const alertOnce = async page => { const b = await log(page); await page.evaluate
   let b7 = await banner(page);
   console.log('⑦ 重新整理之後：還沒重建時先不掛 =', !b7a.shown ? '✅' : '❌', '｜第一次重建仍是 48000：紅框掛回來 =', b7.shown ? '✅' : '❌',
     '｜時刻沿用重新整理之前的 =', b7.text.slice(0, 14) === t7 ? '✅ ' + t7 : '❌ ' + b7.text.slice(0, 14) + ' ≠ ' + t7);
-  console.log('   記得重新整理之前選的「已連線」=', /● 顯示「已連線」/.test(b7.text) ? '✅' : '❌');
+  console.log('   記得重新整理之前選的「已連線」=', /● 現在顯示「已連線」/.test(b7.text) ? '✅' : '❌');
   before = await log(page);
   if (await page.$('#rateWarn [data-rateok]')) await page.click('#rateWarn [data-rateok]');
   await page.waitForTimeout(500);

@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v130</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v131</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2280,11 +2280,12 @@
       // 全新的頁面、全新的元素照樣從手機出來，所以問題不在網頁裡面，重新整理不再列為解法
       + "10/31、11/04 都是這樣，之後的音樂改從手機出來（11/04 重新整理網頁也沒有用）；10/27 更糟，喇叭和手機都完全沒聲音。"
       + (rateLostN ? "之後已有 <b>" + rateLostN + " 次</b>警報。" : "")
-      + "<br><b>請打開 iPhone「設定 → 藍牙」，看這台喇叭顯示什麼，再按下面對應的按鈕：</b></span>"
+      // v131：使用者隔了 22 小時才看到，以為是在問「00:54 那時候」的狀態（已經忘了、沒有適合的按鈕）——問的是現在
+      + "<br><b>不用回想當時的情況。請「現在」打開 iPhone「設定 → 藍牙」，看這台喇叭「現在」顯示什麼，再按下面對應的按鈕：</b></span>"
       + "<button data-bt='off' style='margin-top:8px" + (rateAns === "off" ? ";border-color:var(--accent);font-weight:700" : "") + "'>"
-      + (rateAns === "off" ? "● " : "") + "顯示「未連線」</button> "
+      + (rateAns === "off" ? "● " : "") + "現在顯示「未連線」</button> "
       + "<button data-bt='on' style='margin-top:8px" + (rateAns === "on" ? ";border-color:var(--accent);font-weight:700" : "") + "'>"
-      + (rateAns === "on" ? "● " : "") + "顯示「已連線」</button>"
+      + (rateAns === "on" ? "● " : "") + "現在顯示「已連線」</button>"
       // v128：使用者兩次都是回答完 7～29 秒內就按了「停止」（11/10 08:59、11/11 00:11），
       // 以為要按停止才會「回報」——結果 11/11 那一次半夜就停止監聽了。回答當下就寫進紀錄，什麼都不用再按
       + (rateAns
