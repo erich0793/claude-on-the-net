@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v131</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v132</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -2573,7 +2573,23 @@
   // 背景被降頻到最慘也有 60 幀／分——30 秒內少於 10 幀等於已經聽不見了
   const ALIVE_MIN = 10, WATCH_MS = 30000;
   let lastTicks = -1, stallSince = 0, lastStallLog = 0;
+  // v132：整頁被 iOS 暫停。11/20 08:31 在背景播完一輪、做深度音訊重置把麥克風放掉之後，
+  // 頁面上已經沒有任何音訊在跑，iOS 就把整頁凍住——連這個 30 秒的計時器都停了，
+  // 一直到 18:28 切回這一頁，整整 10 小時一行紀錄都沒有。醒來時舊紀錄寫的是
+  // 「保連脈衝沒有被任何旗標擋住，是它自己沒跑」（11/19 11:07 那次還寫「停擺約 30 秒」，實際是 145 分鐘），兩句都不對。
+  // 背景裡麥克風還開著時，計時器雖被降頻仍照跑（每 10 分鐘一行的「背景偵測被降頻」就是證據），
+  // 所以「這個計時器兩次之間隔了 3 分鐘以上」只會是整頁被停住
+  const FROZEN_MS = 180000;
+  let lastWatchAt = 0, lastWatchVis = "", frozeAt = 0, frozeMs = 0;
   setInterval(() => {
+    const nowW = Date.now();
+    const froze = running && lastWatchAt > 0 && nowW - lastWatchAt > FROZEN_MS;
+    if (froze) {
+      frozeAt = nowW; frozeMs = nowW - lastWatchAt;
+      logEvent("⚠️ 整個網頁被 iOS 暫停了約 " + fmtDry(frozeMs) + "（" + rateWhen(lastWatchAt) + " → " + rateWhen(nowW)
+        + "，暫停前頁面在" + (lastWatchVis === "hidden" ? "背景" : "前景") + "）——這段時間完全沒有在聽，也寫不了任何紀錄");
+    }
+    lastWatchAt = running ? nowW : 0; lastWatchVis = document.visibilityState;
     if (running) { watchBeat(); noteRunBeat(); } // 搭便車寫底色紀錄的心跳：不另開一個計時器（v124：連「還在聽」一起記）
     paintPool();              // 兜底：任何漏掉的消耗路徑最遲 30 秒後也會反映在畫面上
     // 保連脈衝的生命跡象。它自己被擋掉時是完全靜默的，只能由外面的人來問
@@ -2606,14 +2622,18 @@
         pulseStuckLogged = true;
         // 用「被擋當下」記下來的原因，不是現在才問（現在問到的是 30 秒後的狀態）
         const fresh = lastBlockedBy && Date.now() - lastBlockedAt < pulseEvery * 1.5;
+        const frozeNow = frozeAt && Date.now() - frozeAt < WATCH_MS * 2;
         logEvent("⚠️ 音響已 " + Math.round(quiet / 60000) + " 分鐘沒有收到任何聲音（保連脈衝"
-          + (fresh ? "最近一次被「" + lastBlockedBy + "」擋住" : "沒有被任何旗標擋住，是它自己沒跑")
+          + (frozeNow ? "跟著整個網頁被 iOS 暫停了 " + fmtDry(frozeMs)
+            : fresh ? "最近一次被「" + lastBlockedBy + "」擋住" : "沒有被任何旗標擋住，是它自己沒跑")
           + "）——音響可能因此睡著或斷線，警報會改從手機播出");
       }
     }
     if (!running) { lastTicks = -1; stallSince = 0; lastStallLog = 0; lastPulseReport = 0; return; }
     const now = Date.now();
-    if (lastTicks >= 0 && loopTicks - lastTicks < ALIVE_MIN) {
+    // 剛醒來的這一拍：迴圈是跟著整頁一起停的，上面那行已經寫了實際停多久，不要再補一行「停擺約 30 秒」
+    if (froze) { stallSince = 0; lastStallLog = 0; }
+    else if (lastTicks >= 0 && loopTicks - lastTicks < ALIVE_MIN) {
       // 發現的當下，迴圈其實已經死了整整一個檢查週期——起算點要往回推，否則第一行寫「停擺 0 秒」
       if (!stallSince) stallSince = now - WATCH_MS;
       const secs = Math.round((now - stallSince) / 1000);

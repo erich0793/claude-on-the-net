@@ -11,16 +11,18 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(dirname "$HERE")"
 SRC="${1:-$ROOT/index.html}"; ONLY="${2:-}"
-# playwright-core 的位置會隨容器映像變（11/04 起在 /opt/node-tools）：沒指定就找一個真的有它的地方
-if [ -z "${NODE_PATH:-}" ]; then
+# playwright-core 的位置會隨容器映像變（11/04 起在 /opt/node-tools）。11/20 的容器預設就帶了一個
+# NODE_PATH，但那裡面沒有 playwright-core——所以不是「沒指定才找」，而是「指定的地方沒有才找」
+have_pw() { local d; IFS=: read -ra ds <<< "${NODE_PATH:-}"; for d in "${ds[@]}"; do [ -d "$d/playwright-core" ] && return 0; done; return 1; }
+if ! have_pw; then
   for d in "$(npm root -g)/playwright/node_modules" /opt/node-tools/node_modules "$(npm root -g)"; do
-    [ -d "$d/playwright-core" ] && { NODE_PATH="$d"; break; }
+    [ -d "$d/playwright-core" ] && { NODE_PATH="$d${NODE_PATH:+:$NODE_PATH}"; break; }
   done
 fi
 export NODE_PATH
 curl -s -o /dev/null http://127.0.0.1:8123/ || { (cd "$ROOT" && setsid nohup python3 -m http.server 8123 >/dev/null 2>&1 < /dev/null &); sleep 2; }
 # 探針 → 它用的測試副本
-PROBES="pulsephase:ps pulsesmoke:ps keephealth:ps srcerror:sr watchbase:dy dry:dy micstorm:mc michang:mc perm:mc yield:mc unlockmute:mc bgflood:bg rate:mc stuckscope:mc startretry:mc runbeat:mc pulserate:mc playstop:mc latency:mc
+PROBES="pulsephase:ps pulsesmoke:ps keephealth:ps srcerror:sr watchbase:dy dry:dy micstorm:mc michang:mc perm:mc yield:mc unlockmute:mc bgflood:bg rate:mc stuckscope:mc startretry:mc runbeat:mc pulserate:mc playstop:mc latency:mc frozen:mc
 pool:pl sameretry:pl verdict:pl gesture:pl filevol:pl freshtag:fr route:rt logtier:lg clip:dg capdata:dg retain:rn"
 declare -A GEN=([ps]=pulse [sr]=src [dy]=dry [mc]=mic [pl]=pool [fr]=fresh [rt]=route [lg]=log [dg]=diag [rn]=retain [bg]=bg)
 for k in "${!GEN[@]}"; do python3 "$HERE/make_t_${GEN[$k]}.py" "$SRC" "__$k.html" >/dev/null || { echo "產生 __$k.html 失敗"; exit 2; }; done
@@ -30,6 +32,8 @@ for pair in $PROBES; do
   [ -n "$ONLY" ] && [[ "$name" != *"$ONLY"* ]] && continue
   echo "=== probe_$name.js ===" | tee -a "$OUT"
   PAGE="http://127.0.0.1:8123/__$page.html" node "$HERE/probe_$name.js" 2>&1 | tee -a "$OUT"
+  # 探針自己掛掉（例如找不到 playwright-core）時一個 ❌ 都不會印——11/20 就這樣印出「全部通過」
+  [ "${PIPESTATUS[0]}" -ne 0 ] && echo "❌ probe_$name.js 結束碼不是 0" | tee -a "$OUT"
 done
 rm -f "$ROOT"/__*.html
 bad=$(grep -cE "❌|FATAL|PAGEERROR" "$OUT"); rm -f "$OUT"
