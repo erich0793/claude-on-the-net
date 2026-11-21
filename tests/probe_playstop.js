@@ -4,7 +4,7 @@
 // 「剛好碰了畫面、同時被系統停掉」、「早就沒聲音了才去按停止」三種長得一模一樣。
 // ① 按「⏹ 停止播放」：寫明是按了停止鍵、播了多久
 // ② 碰了畫面別的地方、2 秒內被系統停掉：寫成 🔬「手動停止播放？」並說明不是按停止鍵、頁面在前景還是背景
-// ③ 沒有手勢就被停掉：照舊寫「播放被系統中斷」，並帶上播了多久
+// ③ 沒有手勢就被停掉：寫「播放被系統中斷」並帶上播了多久（v133 起會先自動接著播一次，15 秒內再被停才真的結束）
 // ④ 播到一半時間不走了（沒暫停、沒有聲音）：寫「播放到一半停住了」；恢復了也寫；停住時去按停止，那一行要說出停之前已經沒在前進
 // ⑤ 沒在監聽、手動播放中進出背景：要記
 const { openPage, loadTone, log, since, pick, fakeMic } = require('./_common');
@@ -49,6 +49,12 @@ const playing = p => p.evaluate(() => window.__alerting());
   await page.waitForTimeout(800);
   l = pick(since(await log(page), before), /播放被系統中斷/);
   console.log('③ 沒有手勢就被停掉：', /播放被系統中斷（沒有手勢.*播了 0 分 0\d 秒，頁面在前景/.test(l) ? '✅ ' + l.slice(9, 50) : '❌ ' + (l || '沒有').slice(0, 70));
+  await page.waitForTimeout(4500); // 等自動接著播（1 秒後接、3 秒後確認）
+  before = await log(page);
+  await page.evaluate(() => window.__curEl().pause()); // 15 秒內再停一次：這次就真的結束
+  await page.waitForTimeout(800);
+  l = pick(since(await log(page), before), /播放被系統中斷/);
+  console.log('   接過之後 15 秒內又被停：真的結束 =', /這次不再接）/.test(l) && !(await playing(page)) ? '✅' : '❌ ' + (l || '沒有').slice(0, 70));
   await page.waitForTimeout(1500);
 
   // ④ 播到一半時間不走了

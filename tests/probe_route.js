@@ -57,7 +57,10 @@ const log = p => p.evaluate(() => document.getElementById('logBox').innerText);
   if (b1.shown) console.log('    ', b1.text.replace(/\s+/g, ' ').slice(0, 110));
 
   // ② 再觸發兩次——真機上 40 秒後的下一次警報就把狀態列蓋掉了
+  // v133 起第一次被系統停掉會自動接著播：先把那一輪收掉，下面兩次觸發才不會被「警報中」吃掉
   await page.waitForTimeout(4000);
+  await page.evaluate(() => window.__stopAlert());
+  await page.waitForTimeout(1500);
   await fire(); await fire();
   const b2 = await banner(page);
   const st2 = await status(page);

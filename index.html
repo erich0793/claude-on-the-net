@@ -176,7 +176,7 @@
     <h1>👶 嬰兒哭聲偵測播放器</h1>
     <a class="btnlink" href="guide.html">📖 使用說明</a>
   </div>
-  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v132</span></div>
+  <div class="sub">偵測到寶寶哭聲或哀叫時，自動播放你準備的安撫音樂。第一次使用？點右上角「使用說明」三分鐘上手。<span class="tag" style="margin-left:6px" id="verTag">v133</span></div>
   <div id="updBar" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--accent); border-radius:12px; background:var(--panel-2); cursor:pointer">
     🔄 <b>有新版本 <span id="updVer"></span>，點這裡更新</b><span class="hint" id="updNote" style="display:block"></span>
   </div>
@@ -1260,6 +1260,16 @@
     unlockAll(); // 趁手勢把池、熱身、保連音軌一起解鎖
     // 播放中（不論試聽或警報）按下一律停止；警報的善後由 pause 事件處理
     const el = curEl();
+    if (alerting && el.paused) {
+      // v133：自動接著播之前那 1 秒（還有起播前那一下）元素是暫停的。這時按鈕顯示的是「⏹ 停止播放」，
+      // 按下去就要停掉這一輪——不能變成去播試聽檔，也等不到 pause 事件（它已經停著了）
+      stopBtnAt = Date.now();
+      logEvent("手動停止播放（按了「⏹ 停止播放」，播了 " + fmtDur((Date.now() - alertBegunAt) / 1000) + "，當時音樂是暫停的），30 秒內暫不重新觸發");
+      stopAlert(true);
+      cooldownUntil = performance.now() + 30000;
+      if (running) setStatus("listening", "監聽中…", "已手動停止，30 秒內暫不重新觸發");
+      return;
+    }
     if (!el.paused) {
       if (alerting) stopBtnAt = Date.now(); // v129：alertPaused 要分得出「按了停止鍵」與「剛好碰了畫面」
       el.pause(); el.currentTime = 0;
@@ -1275,7 +1285,7 @@
   });
   function refreshTestBtn() {
     // 以「目前實際發聲的元素」為準（警報／手動播放走隱形池元素，不是 #player）
-    testBtn.textContent = !curEl().paused ? "⏹ 停止播放" : "▶️ 試聽音檔";
+    testBtn.textContent = !curEl().paused || alerting ? "⏹ 停止播放" : "▶️ 試聽音檔"; // v133：警報中暫停著（等自動接著播）也是「停止」
   }
   player.addEventListener("play", refreshTestBtn);
   player.addEventListener("pause", refreshTestBtn);
@@ -1537,6 +1547,13 @@
   // 「按了停止鍵」和「剛好碰了畫面、同時被系統停掉」在舊紀錄裡長得一模一樣——要分開寫，
   // 而且要帶上播了多久、頁面在前景還是背景（手動播放沒在監聽時，進出背景以前根本不記）
   let stopBtnAt = 0;
+  // v133：被系統從中途停掉時，1 秒後自動接著播。11/20 08:23 播了 8 秒就被停掉——沒有手勢、頁面在前景、
+  // 使用者確認沒有鬧鐘也沒有電話，最可能就是藍牙喇叭斷線（iOS 在正在出聲的裝置不見時會自動停掉媒體）。
+  // 喇叭一直沒有連回來（21:43 使用者聽到從手機出來），舊做法是整輪就此結束、等寶寶再哭：
+  // 那次隔了 5 分鐘才又播（從手機）。使用者選擇「斷線後馬上改用手機繼續播」。
+  // 防呆：從喇叭上的按鍵或控制中心按暫停，網頁也看不到手勢——所以接過之後 15 秒內又被停，
+  // 就當成是有人要它停（再按一次就會停）；每一輪最多接 2 次。接了卻沒在前進，照舊結束這一輪
+  let resumeN = 0, resumeAt = 0, routeResumed = false;
   function alertPaused(el) {
     if (!alerting || curEl() !== el || el.ended) return;
     const ago = Date.now() - lastGestureAt;
@@ -1545,15 +1562,50 @@
     const where = document.visibilityState === "visible" ? "前景" : "背景";
     // 停之前是不是已經沒聲音了（見下面的播放前進看門狗）：使用者常常是「聽不到了才去按停止」
     const stalled = progEl === el && progStuck >= 2 ? "；停之前已約 " + Math.round((Date.now() - progAt) / 1000) + " 秒沒有前進（那段時間沒有聲音）" : "";
+    if (!byUser && resumeN < 2 && Date.now() - resumeAt > 15000) {
+      resumeN++; resumeAt = Date.now();
+      const n = resumeN, seq = alertSeq;
+      logEvent("⚠️ 播放被系統中斷（沒有手勢，多半是藍牙喇叭斷線；播了 " + played + "，頁面在" + where + stalled
+        + "）——1 秒後自動接著播" + (n > 1 ? "（這一輪第 " + n + " 次）" : "") + "，聲音會改從手機出來");
+      routeLostAt = Date.now(); routeLostN = 0; routeResumed = true; paintRoute();
+      setStatus("alert", "喇叭可能斷線了，改用手機接著播…", "按「⏹ 停止播放」可提前結束");
+      setTimeout(() => resumeAfterDrop(el, n, seq), 1000);
+      return;
+    }
+    const again = !byUser && resumeN ? "；剛才已自動接著播過" + (resumeN > 1 ? " " + resumeN + " 次" : "") + "，這次不再接" : "";
     stopAlert(true);
     cooldownUntil = performance.now() + 30000;
-    logEvent(!byUser ? "⚠️ 播放被系統中斷（沒有手勢，可能是音訊路由改變，例如藍牙斷線；播了 " + played + "，頁面在" + where + stalled + "），30 秒內暫不重新觸發"
+    logEvent(!byUser ? "⚠️ 播放被系統中斷（沒有手勢，可能是音訊路由改變，例如藍牙斷線；播了 " + played + "，頁面在" + where + stalled + again + "），30 秒內暫不重新觸發"
       : viaBtn ? "手動停止播放（按了「⏹ 停止播放」，播了 " + played + stalled + "），30 秒內暫不重新觸發"
       : "🔬 手動停止播放？（" + (ago / 1000).toFixed(1) + " 秒前有人碰了畫面，但不是按「⏹ 停止播放」——也可能是系統剛好在這時停掉的；播了 "
         + played + "，頁面在" + where + stalled + "），30 秒內暫不重新觸發");
-    if (!byUser) { routeLostAt = Date.now(); routeLostN = 0; paintRoute(); }
+    if (!byUser) { routeLostAt = Date.now(); routeLostN = 0; routeResumed = false; paintRoute(); }
     if (running) setStatus("listening", "監聽中…", byUser ? "已手動停止，30 秒內暫不重新觸發"
                                                           : "播放被系統中斷，30 秒內暫不重新觸發");
+  }
+  function resumeAfterDrop(el, n, seq) {
+    const mine = () => alerting && alertSeq === seq && curEl() === el;
+    if (!mine()) return; // 這 1 秒內被按停、播完或換了別顆元素
+    const fail = why => {
+      if (!mine()) return;
+      logEvent("⚠️ 自動接著播沒有成功（" + why + "）——這一輪就此結束，30 秒內暫不重新觸發");
+      routeResumed = false; paintRoute();
+      stopAlert(true);
+      cooldownUntil = performance.now() + 30000;
+      if (running) setStatus("listening", "監聽中…", "播放被系統中斷，30 秒內暫不重新觸發");
+    };
+    let t0 = 0; try { t0 = el.currentTime; } catch (e) {}
+    if (fadeCtx && fadeCtx.state !== "running") { try { fadeCtx.resume().catch(() => {}); } catch (e) {} }
+    let pr;
+    try { pr = el.play(); } catch (e) { fail("例外：" + ((e && e.name) || "未知")); return; }
+    Promise.resolve(pr).then(() => setTimeout(() => {
+      if (!mine()) return; // 3 秒內又被停掉的話，alertPaused 已經處理了
+      const t = el.currentTime;
+      if (el.paused || !(t - t0 > 0.3 || t < t0)) { fail(el.paused ? "元素又停住了" : "時間沒有前進"); return; }
+      lastRealAudioAt = Date.now();
+      logEvent("🔧 已自動接著播（第 " + n + " 次），播放有在前進——現在多半是從手機出來");
+      setStatus("alert", "喇叭可能斷線了，改用手機接著播", "請到 iPhone「設定 → 藍牙」把喇叭連回來；按「⏹ 停止播放」可提前結束");
+    }, 3000)).catch(err => fail("被瀏覽器阻擋：" + ((err && err.name) || "未知")));
   }
   function clearPool() { elPool = []; }
   // 舊的「無手勢補鑄」已移除：08/01 整夜的紀錄證明補鑄元素被 iOS 以
@@ -1659,7 +1711,9 @@
     if (!running || !routeLostAt) { el.hidden = true; return; }
     const d = new Date(routeLostAt), hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
     el.hidden = false;
-    el.innerHTML = "🔇 <b>" + hm + " 播放被系統從中途停掉——請檢查藍牙音響是否還開著、還連著</b>"
+    el.innerHTML = "🔇 <b>" + hm + (routeResumed
+        ? " 播放被系統從中途停掉，已自動改用手機接著播——多半是藍牙喇叭斷線了，請到 iPhone「設定 → 藍牙」把喇叭連回來</b>"
+        : " 播放被系統從中途停掉——請檢查藍牙音響是否還開著、還連著</b>")
       + "<span class='hint' style='display:block'>"
       + (routeLostN ? "之後已有 <b>" + routeLostN + " 次</b>警報，" : "之後的警報")
       + "如果是從手機出聲，就是這個原因。iOS 在輸出裝置改變（例如藍牙斷線）時會自動停掉播放；"
@@ -3366,6 +3420,7 @@
     if (alerting) return;
     const mySeq = ++alertSeq;
     alerting = true; alertBegunAt = Date.now(); cryMs = 0; burstMs = 0; burstStrongMs = 0; burstBestR = 0; burstTimes = [];
+    resumeN = 0; resumeAt = 0; // v133：自動接著播的次數以「這一輪」為範圍
     const evPeakAtTrig = evPeakDb; evPeakDb = -120; burstPeakDb = -120; // 讀走這次的證據峰值後歸零，不留給下一次
     if (player.src) {
       const mins = minsOverride || playDur.value;
